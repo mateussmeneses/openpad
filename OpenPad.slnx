@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/OpenPad.App/OpenPad.App.csproj" />
+    <Project Path="src/OpenPad.Core/OpenPad.Core.csproj" />
+    <Project Path="src/OpenPad.Input/OpenPad.Input.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/OpenPad.Tests/OpenPad.Tests.csproj" />
+  </Folder>
+</Solution>

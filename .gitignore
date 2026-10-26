@@ -1,0 +1,15 @@
+.vs/
+.idea/
+.vscode/
+**/bin/
+**/obj/
+TestResults/
+*.user
+*.suo
+*.tmp
+*.log
+.env
+.env.*
+!*.example
+# User profiles local, do not commit
+profiles-local/
