@@ -176,7 +176,142 @@ public class MappingEngineTests
         Assert.That(_sink.RecordedEvents, Is.Empty);
     }
 
-    private static ControllerSnapshot CreateSnapshot(GamepadButton button, bool pressed, string deviceId = "test-controller")
+    [Test]
+    public void StickMovement_BelowDeadzone_DoesNotDispatchMouseMove()
+    {
+        _engine.Arm();
+        _profile.StickMouseMode = StickMouseMode.RightStick;
+        _profile.StickDeadzone = 0.2f;
+
+        // Movimento leve dentro da deadzone (0.1 < 0.2)
+        var snapshot = CreateSnapshot(
+            GamepadButton.A, false,
+            axes: new Dictionary<GamepadAxis, float>
+            {
+                [GamepadAxis.RightX] = 0.10f,
+                [GamepadAxis.RightY] = -0.12f
+            });
+
+        _engine.ProcessSnapshot(snapshot);
+
+        var mouseMoves = _sink.RecordedEvents.Where(e => e.EventType == InputEventType.MouseMove).ToList();
+        Assert.That(mouseMoves, Is.Empty, "Eixo dentro da deadzone não deve gerar movimento de mouse.");
+    }
+
+    [Test]
+    public void StickMovement_AboveDeadzone_DispatchesMouseMoveWithCalculatedDeltas()
+    {
+        _engine.Arm();
+        _profile.StickMouseMode = StickMouseMode.RightStick;
+        _profile.StickDeadzone = 0.15f;
+        _profile.MouseSensitivity = 20.0f;
+
+        // Movimento relevante (RightX = 0.8, RightY = -0.5)
+        var snapshot = CreateSnapshot(
+            GamepadButton.A, false,
+            axes: new Dictionary<GamepadAxis, float>
+            {
+                [GamepadAxis.RightX] = 0.80f,
+                [GamepadAxis.RightY] = -0.50f
+            });
+
+        _engine.ProcessSnapshot(snapshot);
+
+        var mouseMoves = _sink.RecordedEvents.Where(e => e.EventType == InputEventType.MouseMove).ToList();
+        Assert.That(mouseMoves.Count, Is.EqualTo(1));
+        Assert.That(mouseMoves[0].DeltaX, Is.GreaterThan(0));
+        Assert.That(mouseMoves[0].DeltaY, Is.LessThan(0));
+    }
+
+    [Test]
+    public void StickMovement_WhenStickMouseModeIsNone_DoesNotDispatchMouseMove()
+    {
+        _engine.Arm();
+        _profile.StickMouseMode = StickMouseMode.None;
+
+        var snapshot = CreateSnapshot(
+            GamepadButton.A, false,
+            axes: new Dictionary<GamepadAxis, float>
+            {
+                [GamepadAxis.RightX] = 1.0f,
+                [GamepadAxis.RightY] = 1.0f
+            });
+
+        _engine.ProcessSnapshot(snapshot);
+
+        var mouseMoves = _sink.RecordedEvents.Where(e => e.EventType == InputEventType.MouseMove).ToList();
+        Assert.That(mouseMoves, Is.Empty, "Quando StickMouseMode for None, não deve despachar movimento.");
+    }
+
+    [Test]
+    public void Trigger_BelowThreshold_DoesNotDispatch()
+    {
+        _engine.Arm();
+        _profile.TriggerThreshold = 0.5f;
+        _profile.TriggerBindings[GamepadAxis.TriggerRight] = InputAction.FromMouse(MouseButton.Left);
+
+        // Gatilho pressionado a 0.3 (abaixo do limiar 0.5)
+        var snapshot = CreateSnapshot(
+            GamepadButton.A, false,
+            axes: new Dictionary<GamepadAxis, float>
+            {
+                [GamepadAxis.TriggerRight] = 0.3f
+            });
+
+        _engine.ProcessSnapshot(snapshot);
+
+        Assert.That(_sink.RecordedEvents, Is.Empty, "Gatilho abaixo do threshold não deve disparar ação.");
+    }
+
+    [Test]
+    public void Trigger_AboveThreshold_DispatchesActionAndReleasesWhenBelowThreshold()
+    {
+        _engine.Arm();
+        _profile.TriggerThreshold = 0.5f;
+        _profile.TriggerBindings[GamepadAxis.TriggerRight] = InputAction.FromMouse(MouseButton.Left);
+
+        // 1. Pressiona além do threshold (0.75 >= 0.5)
+        var pressSnapshot = CreateSnapshot(
+            GamepadButton.A, false,
+            axes: new Dictionary<GamepadAxis, float>
+            {
+                [GamepadAxis.TriggerRight] = 0.75f
+            });
+        _engine.ProcessSnapshot(pressSnapshot);
+
+        Assert.That(_sink.RecordedEvents.Count, Is.EqualTo(1));
+        Assert.That(_sink.RecordedEvents[0].EventType, Is.EqualTo(InputEventType.MouseDown));
+        Assert.That(_sink.RecordedEvents[0].MouseButton, Is.EqualTo(MouseButton.Left));
+
+        // 2. Continua pressionando no frame seguinte (0.9 >= 0.5) - NÃO deve disparar MouseDown repetido
+        var holdSnapshot = CreateSnapshot(
+            GamepadButton.A, false,
+            axes: new Dictionary<GamepadAxis, float>
+            {
+                [GamepadAxis.TriggerRight] = 0.90f
+            });
+        _engine.ProcessSnapshot(holdSnapshot);
+        Assert.That(_sink.RecordedEvents.Count, Is.EqualTo(1), "Não deve haver repeat enquanto gatilho for mantido.");
+
+        // 3. Libera o gatilho abaixo do threshold (0.2 < 0.5)
+        var releaseSnapshot = CreateSnapshot(
+            GamepadButton.A, false,
+            axes: new Dictionary<GamepadAxis, float>
+            {
+                [GamepadAxis.TriggerRight] = 0.20f
+            });
+        _engine.ProcessSnapshot(releaseSnapshot);
+
+        Assert.That(_sink.RecordedEvents.Count, Is.EqualTo(2));
+        Assert.That(_sink.RecordedEvents[1].EventType, Is.EqualTo(InputEventType.MouseUp));
+        Assert.That(_sink.RecordedEvents[1].MouseButton, Is.EqualTo(MouseButton.Left));
+    }
+
+    private static ControllerSnapshot CreateSnapshot(
+        GamepadButton button,
+        bool pressed,
+        string deviceId = "test-controller",
+        Dictionary<GamepadAxis, float>? axes = null)
     {
         var buttons = new Dictionary<GamepadButton, bool>();
         foreach (GamepadButton b in Enum.GetValues<GamepadButton>())
@@ -185,12 +320,19 @@ public class MappingEngineTests
         }
         buttons[button] = pressed;
 
-        var axes = new Dictionary<GamepadAxis, float>();
+        var axesDict = new Dictionary<GamepadAxis, float>();
         foreach (GamepadAxis a in Enum.GetValues<GamepadAxis>())
         {
-            axes[a] = 0.0f;
+            axesDict[a] = 0.0f;
+        }
+        if (axes != null)
+        {
+            foreach (var (k, v) in axes)
+            {
+                axesDict[k] = v;
+            }
         }
 
-        return new ControllerSnapshot(deviceId, "Test Controller", true, DateTime.UtcNow, buttons, axes);
+        return new ControllerSnapshot(deviceId, "Test Controller", true, DateTime.UtcNow, buttons, axesDict);
     }
 }

@@ -4,10 +4,11 @@ using OpenPad.Core.Models;
 namespace OpenPad.Core.Engine;
 
 /// <summary>
-/// Motor de mapeamento desacoplado de UI e hardware.
+/// Motor de remapeamento desacoplado de UI e hardware.
 /// Converte eventos semânticos do controle em comandos do InputSink.
 /// Garante que o sistema inicie desarmado e que nenhum input permaneça
 /// pressionado ao desarmar, desconectar, trocar perfil ou encerrar.
+/// Suporta botões, gatilhos analógicos e movimentação de mouse por stick analógico.
 /// </summary>
 public class MappingEngine : IDisposable
 {
@@ -19,6 +20,7 @@ public class MappingEngine : IDisposable
     private bool _disposed = false;
 
     private readonly Dictionary<GamepadButton, bool> _previousButtonStates = new();
+    private readonly Dictionary<GamepadAxis, bool> _previousTriggerStates = new();
     private readonly HashSet<VirtualKey> _activeVirtualKeys = new();
     private readonly HashSet<MouseButton> _activeMouseButtons = new();
 
@@ -150,18 +152,19 @@ public class MappingEngine : IDisposable
 
             _activeDeviceId = snapshot.DeviceId;
 
-            // Se desarmado, não despachamos input, mas atualizamos o estado interno
-            // para evitar que um botão já segurado antes de armar dispare falsamente.
+            // Se desarmado, apenas rastreamos estados anteriores para evitar disparo fantasma ao armar
             if (!_isArmed)
             {
                 foreach (var (button, isPressed) in snapshot.Buttons)
                 {
                     _previousButtonStates[button] = isPressed;
                 }
+                _previousTriggerStates[GamepadAxis.TriggerLeft] = snapshot.GetAxis(GamepadAxis.TriggerLeft) >= _profile.TriggerThreshold;
+                _previousTriggerStates[GamepadAxis.TriggerRight] = snapshot.GetAxis(GamepadAxis.TriggerRight) >= _profile.TriggerThreshold;
                 return;
             }
 
-            // Motor armado: verificar transições dos botões mapeados no perfil
+            // 1. Processar botões digitais
             foreach (var (button, action) in _profile.ButtonBindings)
             {
                 if (action.Type == ActionType.None) continue;
@@ -171,18 +174,90 @@ public class MappingEngine : IDisposable
 
                 if (!wasPressed && isPressed)
                 {
-                    // Transição: Pressionado
                     DispatchActionDown(action);
                 }
                 else if (wasPressed && !isPressed)
                 {
-                    // Transição: Solto
                     DispatchActionUp(action);
                 }
 
                 _previousButtonStates[button] = isPressed;
             }
+
+            // 2. Processar gatilhos analógicos (LT e RT)
+            ProcessTriggerAxis(snapshot, GamepadAxis.TriggerLeft);
+            ProcessTriggerAxis(snapshot, GamepadAxis.TriggerRight);
+
+            // 3. Processar movimentação de mouse por stick analógico
+            ProcessStickMouseMovement(snapshot);
         }
+    }
+
+    private void ProcessTriggerAxis(ControllerSnapshot snapshot, GamepadAxis axis)
+    {
+        if (!_profile.TriggerBindings.TryGetValue(axis, out var action) || action.Type == ActionType.None)
+        {
+            return;
+        }
+
+        float value = snapshot.GetAxis(axis);
+        bool isPressed = value >= _profile.TriggerThreshold;
+        _previousTriggerStates.TryGetValue(axis, out bool wasPressed);
+
+        if (!wasPressed && isPressed)
+        {
+            DispatchActionDown(action);
+        }
+        else if (wasPressed && !isPressed)
+        {
+            DispatchActionUp(action);
+        }
+
+        _previousTriggerStates[axis] = isPressed;
+    }
+
+    private void ProcessStickMouseMovement(ControllerSnapshot snapshot)
+    {
+        if (_profile.StickMouseMode == StickMouseMode.None) return;
+
+        GamepadAxis axisX = _profile.StickMouseMode == StickMouseMode.RightStick ? GamepadAxis.RightX : GamepadAxis.LeftX;
+        GamepadAxis axisY = _profile.StickMouseMode == StickMouseMode.RightStick ? GamepadAxis.RightY : GamepadAxis.LeftY;
+
+        float rawX = snapshot.GetAxis(axisX);
+        float rawY = snapshot.GetAxis(axisY);
+
+        float deadzone = _profile.StickDeadzone;
+
+        float filteredX = ApplyDeadzone(rawX, deadzone);
+        float filteredY = ApplyDeadzone(rawY, deadzone);
+
+        if (filteredX != 0.0f || filteredY != 0.0f)
+        {
+            // Aplica curva quadrática suave para precisão em movimentos finos
+            float signX = Math.Sign(filteredX);
+            float signY = Math.Sign(filteredY);
+
+            float speedX = signX * (filteredX * filteredX) * _profile.MouseSensitivity;
+            float speedY = signY * (filteredY * filteredY) * _profile.MouseSensitivity;
+
+            int dx = (int)Math.Round(speedX);
+            int dy = (int)Math.Round(speedY);
+
+            if (dx != 0 || dy != 0)
+            {
+                _inputSink.SendMouseMove(dx, dy);
+            }
+        }
+    }
+
+    private static float ApplyDeadzone(float value, float deadzone)
+    {
+        float abs = Math.Abs(value);
+        if (abs <= deadzone) return 0.0f;
+
+        // Normaliza a faixa restante de 0 a 1
+        float scaled = (abs - deadzone) / (1.0f - deadzone);
+        return Math.Sign(value) * scaled;
     }
 
     private void DispatchActionDown(InputAction action)
@@ -232,6 +307,7 @@ public class MappingEngine : IDisposable
             _activeVirtualKeys.Clear();
             _activeMouseButtons.Clear();
             _previousButtonStates.Clear();
+            _previousTriggerStates.Clear();
         }
     }
 

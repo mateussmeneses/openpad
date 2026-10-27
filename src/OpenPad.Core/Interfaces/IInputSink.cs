@@ -8,6 +8,7 @@ public interface IInputSink : IDisposable
     void SendKeyUp(VirtualKey key);
     void SendMouseDown(MouseButton button);
     void SendMouseUp(MouseButton button);
+    void SendMouseMove(int dx, int dy);
     void ReleaseAll();
 
     IReadOnlySet<VirtualKey> CurrentlyPressedKeys { get; }

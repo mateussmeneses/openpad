@@ -100,6 +100,38 @@ public class MainViewModel : ViewModelBase, IDisposable
     public double TriggerLT { get => _triggerLT; set => SetField(ref _triggerLT, value); }
     public double TriggerRT { get => _triggerRT; set => SetField(ref _triggerRT, value); }
 
+    // Configurações avançadas de stick e gatilhos
+    private StickMouseMode _selectedStickMouseMode = StickMouseMode.RightStick;
+    private float _mouseSensitivity = 15.0f;
+    private float _stickDeadzone = 0.15f;
+    private float _triggerThreshold = 0.30f;
+
+    public StickMouseMode SelectedStickMouseMode
+    {
+        get => _selectedStickMouseMode;
+        set => SetField(ref _selectedStickMouseMode, value);
+    }
+
+    public float MouseSensitivity
+    {
+        get => _mouseSensitivity;
+        set => SetField(ref _mouseSensitivity, value);
+    }
+
+    public float StickDeadzone
+    {
+        get => _stickDeadzone;
+        set => SetField(ref _stickDeadzone, value);
+    }
+
+    public float TriggerThreshold
+    {
+        get => _triggerThreshold;
+        set => SetField(ref _triggerThreshold, value);
+    }
+
+    public IReadOnlyList<StickMouseMode> AvailableStickMouseModes { get; } = Enum.GetValues<StickMouseMode>();
+
     public ObservableCollection<BindingItemViewModel> Bindings { get; } = new();
     public ObservableCollection<string> LogEntries { get; } = new();
 
@@ -248,6 +280,11 @@ public class MainViewModel : ViewModelBase, IDisposable
     private void LoadProfileIntoEditor(MappingProfile profile)
     {
         ProfileName = profile.Name;
+        SelectedStickMouseMode = profile.StickMouseMode;
+        MouseSensitivity = profile.MouseSensitivity;
+        StickDeadzone = profile.StickDeadzone;
+        TriggerThreshold = profile.TriggerThreshold;
+
         Bindings.Clear();
 
         foreach (GamepadButton btn in Enum.GetValues<GamepadButton>())
@@ -268,13 +305,21 @@ public class MainViewModel : ViewModelBase, IDisposable
         {
             SchemaVersion = 1,
             Name = ProfileName,
-            Description = "Mapeamento atual do usuário"
+            Description = "Mapeamento atual do usuário",
+            StickMouseMode = SelectedStickMouseMode,
+            MouseSensitivity = MouseSensitivity,
+            StickDeadzone = StickDeadzone,
+            TriggerThreshold = TriggerThreshold
         };
 
         foreach (var item in Bindings)
         {
             profile.ButtonBindings[item.Button] = item.ToInputAction();
         }
+
+        // Configura gatilhos padrão (RT -> Clique esquerdo, LT -> Clique direito)
+        profile.TriggerBindings[GamepadAxis.TriggerRight] = InputAction.FromMouse(MouseButton.Left);
+        profile.TriggerBindings[GamepadAxis.TriggerLeft] = InputAction.FromMouse(MouseButton.Right);
 
         _mappingEngine.SetProfile(profile);
         StatusMessage = "Mapeamentos aplicados ao motor de entrada.";

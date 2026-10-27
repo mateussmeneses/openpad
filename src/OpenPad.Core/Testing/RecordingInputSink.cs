@@ -9,10 +9,17 @@ public enum InputEventType
     KeyUp,
     MouseDown,
     MouseUp,
+    MouseMove,
     ReleaseAll
 }
 
-public record RecordedInputEvent(InputEventType EventType, VirtualKey? Key, MouseButton? MouseButton, DateTime Timestamp);
+public record RecordedInputEvent(
+    InputEventType EventType,
+    VirtualKey? Key,
+    MouseButton? MouseButton,
+    DateTime Timestamp,
+    int DeltaX = 0,
+    int DeltaY = 0);
 
 /// <summary>
 /// Sink gravador de eventos de entrada para validação em testes unitários.
@@ -81,6 +88,14 @@ public class RecordingInputSink : IInputSink
         {
             _events.Add(new RecordedInputEvent(InputEventType.MouseUp, null, button, DateTime.UtcNow));
             _pressedMouseButtons.Remove(button);
+        }
+    }
+
+    public void SendMouseMove(int dx, int dy)
+    {
+        lock (_lock)
+        {
+            _events.Add(new RecordedInputEvent(InputEventType.MouseMove, null, null, DateTime.UtcNow, dx, dy));
         }
     }
 

@@ -237,6 +237,8 @@
                     <Grid.RowDefinitions>
                         <!-- Profile toolbar -->
                         <RowDefinition Height="Auto"/>
+                        <!-- Mouse & Triggers settings panel -->
+                        <RowDefinition Height="Auto"/>
                         <!-- Mappings table -->
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
@@ -261,7 +263,54 @@
                         </StackPanel>
                     </Grid>
 
-                    <DataGrid Grid.Row="1" ItemsSource="{Binding Bindings}" AutoGenerateColumns="False"
+                    <!-- Painel de Emulação de Mouse por Analógico & Gatilhos -->
+                    <Border Grid.Row="1" Background="#1E2028" CornerRadius="6" Padding="10,8" Margin="0,0,0,10" BorderBrush="#2F3342" BorderThickness="1">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <!-- Stick Mouse Mode -->
+                            <StackPanel Grid.Column="0" Margin="0,0,6,0">
+                                <TextBlock Text="Mouse via Stick" FontSize="11" Foreground="#88C0D0" FontWeight="SemiBold" Margin="0,0,0,2"/>
+                                <ComboBox ItemsSource="{Binding AvailableStickMouseModes}"
+                                          SelectedItem="{Binding SelectedStickMouseMode}"
+                                          Background="#2E3440" Foreground="#1E1F29" Height="26"/>
+                            </StackPanel>
+
+                            <!-- Sensibilidade -->
+                            <StackPanel Grid.Column="1" Margin="6,0,6,0">
+                                <Grid Margin="0,0,0,2">
+                                    <TextBlock Text="Sensibilidade" FontSize="11" Foreground="#88C0D0" FontWeight="SemiBold"/>
+                                    <TextBlock Text="{Binding MouseSensitivity, StringFormat={}{0:F0}}" HorizontalAlignment="Right" FontSize="11" Foreground="#ECEFF4"/>
+                                </Grid>
+                                <Slider Minimum="5" Maximum="50" Value="{Binding MouseSensitivity}" TickFrequency="1" IsSnapToTickEnabled="True" Height="26"/>
+                            </StackPanel>
+
+                            <!-- Deadzone -->
+                            <StackPanel Grid.Column="2" Margin="6,0,6,0">
+                                <Grid Margin="0,0,0,2">
+                                    <TextBlock Text="Zona Morta (Deadzone)" FontSize="11" Foreground="#88C0D0" FontWeight="SemiBold"/>
+                                    <TextBlock Text="{Binding StickDeadzone, StringFormat={}{0:P0}}" HorizontalAlignment="Right" FontSize="11" Foreground="#ECEFF4"/>
+                                </Grid>
+                                <Slider Minimum="0.05" Maximum="0.40" Value="{Binding StickDeadzone}" TickFrequency="0.01" Height="26"/>
+                            </StackPanel>
+
+                            <!-- Limiar do Gatilho -->
+                            <StackPanel Grid.Column="3" Margin="6,0,0,0">
+                                <Grid Margin="0,0,0,2">
+                                    <TextBlock Text="Limiar Gatilhos (LT/RT)" FontSize="11" Foreground="#88C0D0" FontWeight="SemiBold"/>
+                                    <TextBlock Text="{Binding TriggerThreshold, StringFormat={}{0:P0}}" HorizontalAlignment="Right" FontSize="11" Foreground="#ECEFF4"/>
+                                </Grid>
+                                <Slider Minimum="0.10" Maximum="0.90" Value="{Binding TriggerThreshold}" TickFrequency="0.05" Height="26"/>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <DataGrid Grid.Row="2" ItemsSource="{Binding Bindings}" AutoGenerateColumns="False"
                               CanUserAddRows="False" CanUserDeleteRows="False"
                               Background="#1E1F29" Foreground="#ECEFF4"
                               RowBackground="#252733" AlternatingRowBackground="#2A2D3A"

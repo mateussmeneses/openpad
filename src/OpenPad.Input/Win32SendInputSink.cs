@@ -6,7 +6,7 @@ namespace OpenPad.Input;
 
 /// <summary>
 /// Implementação de IInputSink usando Win32 SendInput.
-/// Fornece injeção de teclas e cliques do mouse no Windows com rastreamento
+/// Fornece injeção de teclas, cliques e movimentação relativa do mouse no Windows com rastreamento
 /// de estado para garantia de liberação de todas as teclas pressionadas.
 /// Não requer privilégios de administrador ou drivers virtuais.
 /// </summary>
@@ -18,6 +18,7 @@ public class Win32SendInputSink : IInputSink
     private const uint KEYEVENTF_KEYDOWN = 0x0000;
     private const uint KEYEVENTF_KEYUP = 0x0002;
 
+    private const uint MOUSEEVENTF_MOVE = 0x0001;
     private const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
     private const uint MOUSEEVENTF_LEFTUP = 0x0004;
     private const uint MOUSEEVENTF_RIGHTDOWN = 0x0008;
@@ -121,7 +122,7 @@ public class Win32SendInputSink : IInputSink
         {
             if (_disposed) return;
             var (flags, data) = GetMouseDownFlags(button);
-            SendMouseInputNative(flags, data);
+            SendMouseInputNative(flags, data, 0, 0);
             _pressedMouseButtons.Add(button);
         }
     }
@@ -132,8 +133,19 @@ public class Win32SendInputSink : IInputSink
         {
             if (_disposed) return;
             var (flags, data) = GetMouseUpFlags(button);
-            SendMouseInputNative(flags, data);
+            SendMouseInputNative(flags, data, 0, 0);
             _pressedMouseButtons.Remove(button);
+        }
+    }
+
+    public void SendMouseMove(int dx, int dy)
+    {
+        if (dx == 0 && dy == 0) return;
+
+        lock (_syncLock)
+        {
+            if (_disposed) return;
+            SendMouseInputNative(MOUSEEVENTF_MOVE, 0, dx, dy);
         }
     }
 
@@ -152,7 +164,7 @@ public class Win32SendInputSink : IInputSink
             foreach (var btn in _pressedMouseButtons.ToList())
             {
                 var (flags, data) = GetMouseUpFlags(btn);
-                SendMouseInputNative(flags, data);
+                SendMouseInputNative(flags, data, 0, 0);
             }
             _pressedMouseButtons.Clear();
         }
@@ -179,7 +191,7 @@ public class Win32SendInputSink : IInputSink
         SendInput(1, new[] { input }, Marshal.SizeOf<NativeInput>());
     }
 
-    private static void SendMouseInputNative(uint flags, uint mouseData)
+    private static void SendMouseInputNative(uint flags, uint mouseData, int dx, int dy)
     {
         var input = new NativeInput
         {
@@ -188,8 +200,8 @@ public class Win32SendInputSink : IInputSink
             {
                 mi = new MOUSEINPUT
                 {
-                    dx = 0,
-                    dy = 0,
+                    dx = dx,
+                    dy = dy,
                     mouseData = mouseData,
                     dwFlags = flags,
                     time = 0,
