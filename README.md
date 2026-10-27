@@ -1,48 +1,52 @@
 # OpenPad 🎮
 
 [![OpenPad CI/CD](https://github.com/mateussmeneses/openpad/actions/workflows/ci.yml/badge.svg)](https://github.com/mateussmeneses/openpad/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)](https://github.com/mateussmeneses/openpad/releases)
+[![Version](https://img.shields.io/badge/version-1.0.0--stable-brightgreen.svg)](https://github.com/mateussmeneses/openpad/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Tests: 72 Passed](https://img.shields.io/badge/tests-72%20passed-success.svg)](https://github.com/mateussmeneses/openpad/actions)
 
-**Open-source Gamepad-to-Keyboard/Mouse Remapper for Windows**
+**Open-source Gamepad-to-Keyboard/Mouse Remapper for Windows — Versão 1.0 Estável**
 
-OpenPad é uma aplicação Windows moderna e segura para remapear botões de controles (Xbox, PlayStation, genéricos) para teclas de teclado e botões do mouse. Construído com C#/.NET 10, WPF (MVVM), SDL3 e APIs Win32 nativas.
+OpenPad é uma aplicação Windows profissional, moderna e segura para remapear botões de controles (Xbox, PlayStation DualSense/DualShock, Nintendo Switch Pro e genéricos) para teclas de teclado e botões do mouse. Construído com C#/.NET 10, WPF (MVVM), SDL3 e APIs Win32 nativas.
 
 Licenciado sob [MIT License](LICENSE).
 
 ---
 
-## 🌟 Recursos e Evoluções (v0.2.0)
+## 🌟 Recursos Completos (v1.0.0 Estável)
 
-- **Troca Automática de Perfis por Jogo (`AutoProfileManager`)**:
-  - Monitoramento contínuo em segundo plano do processo em primeiro plano (`GetForegroundWindow`).
-  - Associação de perfis a executáveis (ex: `notepad.exe`, `Doom.exe`).
-  - Alternância atômica e segura com liberação imediata de quaisquer inputs retidos.
-- **Feedback Háptico com Vibração SDL3 (`SDL.RumbleGamepad`)**:
-  - Pulso curto e nítido (35.000 de intensidade) ao **Ativar / Armar**.
-  - Pulso grave e firme (40.000 de intensidade) ao **Desarmar / Emergência**.
-  - Vibração de gatilhos acionados para sensação tátil instantânea.
-- **Curvas de Resposta de Analógicos Customizáveis**:
-  - Modos configuráveis: **Linear**, **Quadrática** (precisão cirúrgica no centro), **Agressiva** (resposta rápida para ação e FPS) e **Suave** (s-curve para pilotagem/simuladores).
-  - Normalização radial e filtragem estrita de zona morta (*deadzone*).
-- **Integração com Área de Notificação (System Tray)**:
-  - Ícone dinâmico com status de arme (Verde: Armado, Cinza/Vermelho: Desarmado).
-  - Opções para minimizar para a bandeja e fechar para a bandeja.
-  - Menu de contexto na bandeja com comandos rápidos: Ativar, Desarmar, Abrir Janela e Fechar.
-- **Atalhos Globais e Combinação no Controle**:
-  - Atalho global de teclado Win32: `Ctrl + Shift + F12` para alternar entre Armar/Desarmar.
-  - Atalho físico no controle: Segurar **Back + Start** (ou View + Menu) por 1,2 segundos para alternar o arme com feedback tátil.
-- **Detecção Nativa com SDL3**:
-  - Suporte completo a gamepads modernos via SDL3 Gamepad API nativa (x64) empacotada.
-  - Monitoramento em tempo real a 120 Hz de eixos, botões e gatilhos.
-- **Mapeamento Flexível**:
-  - Configure qualquer botão do controle para disparar uma tecla do teclado (códigos Win32 Virtual-Key) ou botão do mouse.
-- **Perfis Versionados em JSON**:
-  - Salve, carregue e restaure perfis com validação de esquema (`schemaVersion`).
-- **Segurança e Confiabilidade por Padrão**:
-  - Inicia sempre **DESARMADO** (*DISARMED*).
-  - **Liberação Garantida de Inputs**: Ao desarmar, desconectar o controle, alternar de perfil ou fechar a janela, todas as teclas virtuais e botões do mouse pressionados são liberados imediatamente via `ReleaseAll()`.
-  - Zero drivers proprietários não assinados, zero injeção de processos ou riscos de banimento de anti-cheat.
+1. **Troca Automática de Perfis por Jogo (`AutoProfileManager`)**:
+   - Monitoramento em segundo plano do processo ativo em primeiro plano (`GetForegroundWindow`).
+   - Associação de perfis com jogos (ex: `Doom.exe`, `EldenRing.exe`, `notepad.exe`).
+   - Transição atômica e segura com liberação imediata de quaisquer inputs retidos.
+2. **Filtro de Mira Giroscópica (`GyroAimingFilter`)**:
+   - Conversão de velocidade angular do giroscópio (graus/segundo) para deslocamento suave de cursor.
+   - Zona morta configurável e acumulador contínuo de frações sub-pixel para micro-mira cirúrgica.
+3. **Menu Radial Virtual / Roda de Ações (`RadialMenuEngine`)**:
+   - Menu transparente em setores angulares (4 a 8 itens) controlado pelo analógico para troca rápida de armas/feitiços.
+4. **Gatilhos de Ação Dupla Hair-Trigger (`DualActionTriggerEngine`)**:
+   - Dois estágios de acionamento analógico: Soft Pull (leve) e Full Pull (completo) com modos configuráveis.
+5. **Gravador e Reprodutor de Macros (`MacroEngine`)**:
+   - Sequências temporizadas de teclas e cliques com precisão de milissegundos e repetição programada.
+   - Cancelamento atômico e seguro ao desarmar.
+6. **Reprodutor de Padrões Hápticos (`HapticPatternPlayer`)**:
+   - Vibração dinâmica com presets (`Heartbeat`, `DoublePulse`, `WarningThud`) via SDL3 Rumble.
+7. **Curvas de Resposta de Analógicos Customizáveis**:
+   - Modos **Linear**, **Quadrática**, **Agressiva** e **Suave (S-Curve)** com deadzone radial rigorosa.
+8. **Guardião de Segurança de Processos (`ProcessSecurityGuard`)**:
+   - Bloqueio automático de injeção em janelas críticas do sistema (Gerenciador de Tarefas, prompt UAC, KeePass, 1Password, Bitwarden).
+9. **Hub de Compartilhamento de Perfis com SHA-256 (`ProfileBundleHub`)**:
+   - Empacotamento de perfis em arquivos `.json` assinados com hash SHA-256 à prova de adulteração.
+10. **Gerenciador de Múltiplos Controles e Hot-Plug (`GamepadSlotManager`)**:
+    - Suporte a 4 jogadores independentes (P1 a P4) com fallback dinâmico de jogador primário.
+11. **Modo Linha de Comando Headless (`CliRunner`)**:
+    - Execução e automação direta via terminal: `openpad --profile "FPS.json" --arm --tray`.
+12. **Bandeja do Sistema (System Tray) e Atalhos Globais**:
+    - Minimizar/fechar para o relógio do Windows, atalho global `Ctrl + Shift + F12` e combo `Back + Start` no controle.
+13. **Segurança e Confiabilidade por Padrão**:
+    - Inicia sempre **DESARMADO**.
+    - Liberação atômica imediata (`ReleaseAll()`) em qualquer interrupção.
+    - Zero drivers proprietários não assinados, zero injeção de processos ou riscos de anti-cheat.
 
 ---
 
