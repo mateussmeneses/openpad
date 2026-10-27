@@ -9,6 +9,14 @@ public enum StickMouseMode
     LeftStick = 2
 }
 
+public enum StickCurveType
+{
+    Quadratic = 0,
+    Linear = 1,
+    Aggressive = 2,
+    Smooth = 3
+}
+
 public class MappingProfile
 {
     [JsonPropertyName("schemaVersion")]
@@ -19,6 +27,15 @@ public class MappingProfile
 
     [JsonPropertyName("description")]
     public string? Description { get; set; } = "Default standard gamepad mapping";
+
+    [JsonPropertyName("associatedProcesses")]
+    public List<string> AssociatedProcessNames { get; set; } = new();
+
+    [JsonPropertyName("hapticFeedbackEnabled")]
+    public bool HapticFeedbackEnabled { get; set; } = true;
+
+    [JsonPropertyName("stickCurveType")]
+    public StickCurveType StickCurveType { get; set; } = StickCurveType.Quadratic;
 
     [JsonPropertyName("buttonBindings")]
     public Dictionary<GamepadButton, InputAction> ButtonBindings { get; set; } = new();

@@ -13,6 +13,7 @@ namespace OpenPad.Core.Engine;
 public class MappingEngine : IDisposable
 {
     private readonly IInputSink _inputSink;
+    private readonly IControllerSource? _controllerSource;
     private readonly object _syncLock = new();
     private bool _isArmed = false;
     private MappingProfile _profile;
@@ -70,10 +71,11 @@ public class MappingEngine : IDisposable
         }
     }
 
-    public MappingEngine(IInputSink inputSink, MappingProfile? initialProfile = null)
+    public MappingEngine(IInputSink inputSink, MappingProfile? initialProfile = null, IControllerSource? controllerSource = null)
     {
         _inputSink = inputSink ?? throw new ArgumentNullException(nameof(inputSink));
         _profile = initialProfile ?? MappingProfile.CreateDefault();
+        _controllerSource = controllerSource;
     }
 
     public void Arm()
@@ -85,6 +87,10 @@ public class MappingEngine : IDisposable
             LogDiagnostics("Motor de remapeamento ATIVADO (ARMED).");
         }
         ArmedStateChanged?.Invoke(this, true);
+        if (_profile.HapticFeedbackEnabled)
+        {
+            _controllerSource?.SetRumble(_activeDeviceId ?? "all", 0, 35000, 80);
+        }
     }
 
     public void Disarm()
@@ -101,6 +107,10 @@ public class MappingEngine : IDisposable
             LogDiagnostics("Motor de remapeamento DESARMADO (DISARMED). Todos os inputs liberados.");
         }
         ArmedStateChanged?.Invoke(this, false);
+        if (_profile.HapticFeedbackEnabled)
+        {
+            _controllerSource?.SetRumble(_activeDeviceId ?? "all", 40000, 0, 120);
+        }
     }
 
     public void ToggleArmed()
@@ -300,6 +310,10 @@ public class MappingEngine : IDisposable
         if (!wasPressed && isPressed)
         {
             DispatchActionDown(action);
+            if (_profile.HapticFeedbackEnabled)
+            {
+                _controllerSource?.SetRumble(_activeDeviceId ?? "all", 0, 15000, 30);
+            }
         }
         else if (wasPressed && !isPressed)
         {
@@ -326,12 +340,18 @@ public class MappingEngine : IDisposable
 
         if (filteredX != 0.0f || filteredY != 0.0f)
         {
-            // Aplica curva quadrática suave para precisão em movimentos finos
             float signX = Math.Sign(filteredX);
             float signY = Math.Sign(filteredY);
 
-            float speedX = signX * (filteredX * filteredX) * _profile.MouseSensitivity;
-            float speedY = signY * (filteredY * filteredY) * _profile.MouseSensitivity;
+            float magX = Math.Abs(filteredX);
+            float magY = Math.Abs(filteredY);
+
+            // Aplica curva de resposta selecionada no perfil (Linear, Quadrática, Agressiva ou Suave)
+            float factorX = ApplyCurve(magX, _profile.StickCurveType);
+            float factorY = ApplyCurve(magY, _profile.StickCurveType);
+
+            float speedX = signX * factorX * _profile.MouseSensitivity;
+            float speedY = signY * factorY * _profile.MouseSensitivity;
 
             int dx = (int)Math.Round(speedX);
             int dy = (int)Math.Round(speedY);
@@ -341,6 +361,17 @@ public class MappingEngine : IDisposable
                 _inputSink.SendMouseMove(dx, dy);
             }
         }
+    }
+
+    private static float ApplyCurve(float normalizedMagnitude, StickCurveType curveType)
+    {
+        return curveType switch
+        {
+            StickCurveType.Linear => normalizedMagnitude,
+            StickCurveType.Aggressive => (float)Math.Pow(normalizedMagnitude, 1.4),
+            StickCurveType.Smooth => (float)Math.Pow(normalizedMagnitude, 2.5),
+            _ => normalizedMagnitude * normalizedMagnitude // Quadratic (default)
+        };
     }
 
     private static float ApplyDeadzone(float value, float deadzone)

@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Threading;
 using Microsoft.Win32;
 using OpenPad.App.Common;
+using OpenPad.App.Services;
 using OpenPad.Core.Engine;
 using OpenPad.Core.Interfaces;
 using OpenPad.Core.Models;
@@ -18,6 +19,8 @@ public class MainViewModel : ViewModelBase, IDisposable
     private readonly IInputSink _inputSink;
     private readonly MappingEngine _mappingEngine;
     private readonly JsonProfileStore _profileStore;
+    private readonly AutoProfileManager _autoProfileManager;
+    private readonly ForegroundProcessWatcher _processWatcher;
     private readonly Dispatcher _dispatcher;
 
     private bool _isArmed;
@@ -102,14 +105,22 @@ public class MainViewModel : ViewModelBase, IDisposable
 
     // Configurações avançadas de stick e gatilhos
     private StickMouseMode _selectedStickMouseMode = StickMouseMode.RightStick;
+    private StickCurveType _selectedStickCurveType = StickCurveType.Quadratic;
     private float _mouseSensitivity = 15.0f;
     private float _stickDeadzone = 0.15f;
     private float _triggerThreshold = 0.30f;
+    private string _associatedProcessesText = "";
 
     public StickMouseMode SelectedStickMouseMode
     {
         get => _selectedStickMouseMode;
         set => SetField(ref _selectedStickMouseMode, value);
+    }
+
+    public StickCurveType SelectedStickCurveType
+    {
+        get => _selectedStickCurveType;
+        set => SetField(ref _selectedStickCurveType, value);
     }
 
     public float MouseSensitivity
@@ -130,7 +141,14 @@ public class MainViewModel : ViewModelBase, IDisposable
         set => SetField(ref _triggerThreshold, value);
     }
 
+    public string AssociatedProcessesText
+    {
+        get => _associatedProcessesText;
+        set => SetField(ref _associatedProcessesText, value);
+    }
+
     public IReadOnlyList<StickMouseMode> AvailableStickMouseModes { get; } = Enum.GetValues<StickMouseMode>();
+    public IReadOnlyList<StickCurveType> AvailableStickCurveTypes { get; } = Enum.GetValues<StickCurveType>();
 
     public ObservableCollection<BindingItemViewModel> Bindings { get; } = new();
     public ObservableCollection<string> LogEntries { get; } = new();
@@ -158,8 +176,10 @@ public class MainViewModel : ViewModelBase, IDisposable
         _inputSink = new Win32SendInputSink();
 
         var initialProfile = MappingProfile.CreateDefault();
-        _mappingEngine = new MappingEngine(_inputSink, initialProfile);
         _controllerSource = new SDL3ControllerSource();
+        _mappingEngine = new MappingEngine(_inputSink, initialProfile, _controllerSource);
+        _autoProfileManager = new AutoProfileManager(initialProfile);
+        _processWatcher = new ForegroundProcessWatcher();
 
         ToggleArmedCommand = new RelayCommand(ToggleArmed);
         EmergencyDisarmCommand = new RelayCommand(Disarm);
@@ -191,6 +211,21 @@ public class MainViewModel : ViewModelBase, IDisposable
 
         // Popula bindings do perfil inicial
         LoadProfileIntoEditor(initialProfile);
+
+        // Conecta troca automática de perfis por processo em primeiro plano
+        _processWatcher.ForegroundProcessChanged += (s, procName) =>
+        {
+            _dispatcher.InvokeAsync(() =>
+            {
+                if (_autoProfileManager.CheckAndApplyForegroundProcess(procName, _mappingEngine))
+                {
+                    LoadProfileIntoEditor(_mappingEngine.CurrentProfile);
+                    AddLog($"Troca automática de perfil: '{_mappingEngine.CurrentProfile.Name}' para o processo '{procName}'");
+                    StatusMessage = $"Perfil '{_mappingEngine.CurrentProfile.Name}' ativado para {procName}";
+                }
+            });
+        };
+        _processWatcher.Start();
 
         // Inicia escuta
         _controllerSource.Start();
@@ -281,9 +316,11 @@ public class MainViewModel : ViewModelBase, IDisposable
     {
         ProfileName = profile.Name;
         SelectedStickMouseMode = profile.StickMouseMode;
+        SelectedStickCurveType = profile.StickCurveType;
         MouseSensitivity = profile.MouseSensitivity;
         StickDeadzone = profile.StickDeadzone;
         TriggerThreshold = profile.TriggerThreshold;
+        AssociatedProcessesText = string.Join(", ", profile.AssociatedProcessNames);
 
         Bindings.Clear();
 
@@ -307,9 +344,13 @@ public class MainViewModel : ViewModelBase, IDisposable
             Name = ProfileName,
             Description = "Mapeamento atual do usuário",
             StickMouseMode = SelectedStickMouseMode,
+            StickCurveType = SelectedStickCurveType,
             MouseSensitivity = MouseSensitivity,
             StickDeadzone = StickDeadzone,
-            TriggerThreshold = TriggerThreshold
+            TriggerThreshold = TriggerThreshold,
+            AssociatedProcessNames = AssociatedProcessesText
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToList()
         };
 
         foreach (var item in Bindings)
@@ -322,6 +363,7 @@ public class MainViewModel : ViewModelBase, IDisposable
         profile.TriggerBindings[GamepadAxis.TriggerLeft] = InputAction.FromMouse(MouseButton.Right);
 
         _mappingEngine.SetProfile(profile);
+        _autoProfileManager.RegisterProfile(profile);
         StatusMessage = "Mapeamentos aplicados ao motor de entrada.";
     }
 
@@ -396,6 +438,7 @@ public class MainViewModel : ViewModelBase, IDisposable
 
     public void Dispose()
     {
+        _processWatcher.Dispose();
         _controllerSource.Stop();
         _controllerSource.Dispose();
         _mappingEngine.Dispose();

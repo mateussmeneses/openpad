@@ -60,6 +60,14 @@ public class FakeControllerSource : IControllerSource
         EmitSnapshot(snapshot);
     }
 
+    public List<(string deviceId, ushort lowFreq, ushort highFreq, uint durationMs)> RumbleHistory { get; } = new();
+
+    public bool SetRumble(string deviceId, ushort lowFrequencyRumble, ushort highFrequencyRumble, uint durationMs)
+    {
+        RumbleHistory.Add((deviceId, lowFrequencyRumble, highFrequencyRumble, durationMs));
+        return true;
+    }
+
     public void Dispose()
     {
         Stop();

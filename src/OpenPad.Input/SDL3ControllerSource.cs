@@ -43,6 +43,30 @@ public class SDL3ControllerSource : IControllerSource
         }
     }
 
+    public bool SetRumble(string deviceId, ushort lowFrequencyRumble, ushort highFrequencyRumble, uint durationMs)
+    {
+        lock (_syncLock)
+        {
+            if (!_isRunning || !_sdlInitialized) return false;
+
+            bool success = false;
+            foreach (var (id, handle) in _openGamepads)
+            {
+                if (id.ToString() == deviceId || deviceId == "all" || string.IsNullOrEmpty(deviceId))
+                {
+                    if (handle != IntPtr.Zero)
+                    {
+                        if (SDL.RumbleGamepad(handle, lowFrequencyRumble, highFrequencyRumble, durationMs))
+                        {
+                            success = true;
+                        }
+                    }
+                }
+            }
+            return success;
+        }
+    }
+
     public void Start()
     {
         lock (_syncLock)

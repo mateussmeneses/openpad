@@ -244,6 +244,50 @@ public class MappingEngineTests
     }
 
     [Test]
+    public void StickMovement_WithLinearCurve_CalculatesDeltaProportionally()
+    {
+        _engine.Arm();
+        _profile.StickMouseMode = StickMouseMode.RightStick;
+        _profile.StickDeadzone = 0.0f;
+        _profile.MouseSensitivity = 10.0f;
+        _profile.StickCurveType = StickCurveType.Linear;
+
+        // Stick X a 0.5f na curva linear: dx = 0.5 * 10 = 5
+        var snapshot = CreateSnapshot(
+            GamepadButton.A, false,
+            axes: new Dictionary<GamepadAxis, float>
+            {
+                [GamepadAxis.RightX] = 0.5f,
+                [GamepadAxis.RightY] = 0.0f
+            });
+
+        _engine.ProcessSnapshot(snapshot);
+
+        var mouseMoves = _sink.RecordedEvents.Where(e => e.EventType == InputEventType.MouseMove).ToList();
+        Assert.That(mouseMoves.Count, Is.EqualTo(1));
+        Assert.That(mouseMoves[0].DeltaX, Is.EqualTo(5));
+    }
+
+    [Test]
+    public void HapticFeedback_TriggersRumbleOnArmAndDisarm()
+    {
+        var fakeController = new FakeControllerSource();
+        using var engineWithHaptics = new MappingEngine(_sink, _profile, fakeController);
+
+        _profile.HapticFeedbackEnabled = true;
+
+        // Ao armar, deve emitir pulso háptico
+        engineWithHaptics.Arm();
+        Assert.That(fakeController.RumbleHistory.Count, Is.EqualTo(1));
+        Assert.That(fakeController.RumbleHistory[0].highFreq, Is.GreaterThan(0));
+
+        // Ao desarmar, deve emitir pulso háptico grave
+        engineWithHaptics.Disarm();
+        Assert.That(fakeController.RumbleHistory.Count, Is.EqualTo(2));
+        Assert.That(fakeController.RumbleHistory[1].lowFreq, Is.GreaterThan(0));
+    }
+
+    [Test]
     public void Trigger_BelowThreshold_DoesNotDispatch()
     {
         _engine.Arm();

@@ -13,4 +13,6 @@ public interface IControllerSource : IDisposable
     bool IsRunning { get; }
 
     IReadOnlyList<ControllerInfo> GetConnectedControllers();
+
+    bool SetRumble(string deviceId, ushort lowFrequencyRumble, ushort highFrequencyRumble, uint durationMs);
 }
