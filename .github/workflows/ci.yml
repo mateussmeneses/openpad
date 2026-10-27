@@ -1,0 +1,40 @@
+name: OpenPad CI/CD
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-and-test:
+    name: Build & Test (Windows .NET 10)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore OpenPad.slnx
+
+      - name: Build solution (Release)
+        run: dotnet build OpenPad.slnx --configuration Release --no-restore
+
+      - name: Run NUnit tests
+        run: dotnet test OpenPad.slnx --configuration Release --no-build --verbosity normal
+
+      - name: Publish OpenPad App
+        run: dotnet publish src/OpenPad.App/OpenPad.App.csproj --configuration Release -o publish/
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenPad-Windows-Release
+          path: publish/
+          retention-days: 7
