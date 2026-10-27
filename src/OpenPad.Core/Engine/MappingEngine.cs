@@ -21,8 +21,10 @@ public class MappingEngine : IDisposable
 
     private readonly Dictionary<GamepadButton, bool> _previousButtonStates = new();
     private readonly Dictionary<GamepadAxis, bool> _previousTriggerStates = new();
+    private readonly Dictionary<GamepadButton, (DateTime timestamp, bool isDown, InputAction action)> _turboStates = new();
     private readonly HashSet<VirtualKey> _activeVirtualKeys = new();
     private readonly HashSet<MouseButton> _activeMouseButtons = new();
+    private bool _wasArmComboActive = false;
 
     public event EventHandler<bool>? ArmedStateChanged;
     public event EventHandler<MappingProfile>? ProfileChanged;
@@ -152,6 +154,20 @@ public class MappingEngine : IDisposable
 
             _activeDeviceId = snapshot.DeviceId;
 
+            // 0. Detecção de atalho físico no gamepad para alternar estado Armado/Desarmado (Back + Start)
+            bool isComboActive = snapshot.IsButtonPressed(GamepadButton.Back) && snapshot.IsButtonPressed(GamepadButton.Start);
+            if (isComboActive && !_wasArmComboActive)
+            {
+                _wasArmComboActive = true;
+                ToggleArmed();
+                LogDiagnostics($"Atalho físico de controle (Back+Start) acionado: motor {(_isArmed ? "ARMADO" : "DESARMADO")}");
+                return;
+            }
+            else if (!isComboActive)
+            {
+                _wasArmComboActive = false;
+            }
+
             // Se desarmado, apenas rastreamos estados anteriores para evitar disparo fantasma ao armar
             if (!_isArmed)
             {
@@ -164,21 +180,44 @@ public class MappingEngine : IDisposable
                 return;
             }
 
-            // 1. Processar botões digitais
-            foreach (var (button, action) in _profile.ButtonBindings)
+            // 1. Processar botões digitais (com suporte a Shift Modifier e Modo Turbo)
+            bool isShiftActive = _profile.ShiftModifier.HasValue && snapshot.IsButtonPressed(_profile.ShiftModifier.Value);
+            var candidateButtons = new HashSet<GamepadButton>(_profile.ButtonBindings.Keys);
+            if (isShiftActive)
             {
+                foreach (var k in _profile.ShiftBindings.Keys)
+                {
+                    candidateButtons.Add(k);
+                }
+            }
+
+            foreach (var button in candidateButtons)
+            {
+                if (_profile.ShiftModifier.HasValue && button == _profile.ShiftModifier.Value)
+                {
+                    continue; // Modificador em si não dispara tecla regular
+                }
+
+                var action = ResolveActionForButton(button, isShiftActive);
                 if (action.Type == ActionType.None) continue;
 
                 var isPressed = snapshot.IsButtonPressed(button);
                 _previousButtonStates.TryGetValue(button, out var wasPressed);
 
-                if (!wasPressed && isPressed)
+                if (action.IsTurbo)
                 {
-                    DispatchActionDown(action);
+                    ProcessTurboButton(button, action, isPressed, wasPressed, snapshot.Timestamp);
                 }
-                else if (wasPressed && !isPressed)
+                else
                 {
-                    DispatchActionUp(action);
+                    if (!wasPressed && isPressed)
+                    {
+                        DispatchActionDown(action);
+                    }
+                    else if (wasPressed && !isPressed)
+                    {
+                        DispatchActionUp(action);
+                    }
                 }
 
                 _previousButtonStates[button] = isPressed;
@@ -191,6 +230,60 @@ public class MappingEngine : IDisposable
             // 3. Processar movimentação de mouse por stick analógico
             ProcessStickMouseMovement(snapshot);
         }
+    }
+
+    private void ProcessTurboButton(GamepadButton button, InputAction action, bool isPressed, bool wasPressed, DateTime timestamp)
+    {
+        if (!wasPressed && isPressed)
+        {
+            // Começou a pressionar: dispara primeiro KeyDown / MouseDown
+            DispatchActionDown(action);
+            _turboStates[button] = (timestamp, true, action);
+        }
+        else if (wasPressed && isPressed)
+        {
+            // Mantido pressionado: pulsa periodicamente a cada 50ms
+            if (_turboStates.TryGetValue(button, out var state))
+            {
+                if ((timestamp - state.timestamp).TotalMilliseconds >= 50)
+                {
+                    if (state.isDown)
+                    {
+                        DispatchActionUp(action);
+                        _turboStates[button] = (timestamp, false, action);
+                    }
+                    else
+                    {
+                        DispatchActionDown(action);
+                        _turboStates[button] = (timestamp, true, action);
+                    }
+                }
+            }
+        }
+        else if (wasPressed && !isPressed)
+        {
+            // Soltou o botão: garante que se estava Down, solte
+            if (_turboStates.TryGetValue(button, out var state) && state.isDown)
+            {
+                DispatchActionUp(action);
+            }
+            _turboStates.Remove(button);
+        }
+    }
+
+    private InputAction ResolveActionForButton(GamepadButton button, bool isShiftActive)
+    {
+        if (isShiftActive && _profile.ShiftBindings.TryGetValue(button, out var shiftAction) && shiftAction.Type != ActionType.None)
+        {
+            return shiftAction;
+        }
+
+        if (_profile.ButtonBindings.TryGetValue(button, out var regularAction))
+        {
+            return regularAction;
+        }
+
+        return InputAction.None();
     }
 
     private void ProcessTriggerAxis(ControllerSnapshot snapshot, GamepadAxis axis)
@@ -308,6 +401,7 @@ public class MappingEngine : IDisposable
             _activeMouseButtons.Clear();
             _previousButtonStates.Clear();
             _previousTriggerStates.Clear();
+            _turboStates.Clear();
         }
     }
 

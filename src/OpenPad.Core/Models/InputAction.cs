@@ -13,24 +13,29 @@ public record InputAction
     [JsonPropertyName("mouseButton")]
     public MouseButton? MouseButton { get; init; }
 
+    [JsonPropertyName("isTurbo")]
+    public bool IsTurbo { get; init; } = false;
+
     public static InputAction None() => new() { Type = ActionType.None };
 
-    public static InputAction FromKey(VirtualKey key) => new()
+    public static InputAction FromKey(VirtualKey key, bool isTurbo = false) => new()
     {
         Type = ActionType.Key,
-        Key = key
+        Key = key,
+        IsTurbo = isTurbo
     };
 
-    public static InputAction FromMouse(MouseButton button) => new()
+    public static InputAction FromMouse(MouseButton button, bool isTurbo = false) => new()
     {
         Type = ActionType.MouseButton,
-        MouseButton = button
+        MouseButton = button,
+        IsTurbo = isTurbo
     };
 
     public override string ToString() => Type switch
     {
-        ActionType.Key => $"Key: {Key}",
-        ActionType.MouseButton => $"Mouse: {MouseButton}",
+        ActionType.Key => IsTurbo ? $"Key: {Key} (Turbo)" : $"Key: {Key}",
+        ActionType.MouseButton => IsTurbo ? $"Mouse: {MouseButton} (Turbo)" : $"Mouse: {MouseButton}",
         _ => "None"
     };
 }

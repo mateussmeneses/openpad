@@ -307,6 +307,133 @@ public class MappingEngineTests
         Assert.That(_sink.RecordedEvents[1].MouseButton, Is.EqualTo(MouseButton.Left));
     }
 
+    [Test]
+    public void BackAndStart_TogglesArmedStateDirectlyFromController()
+    {
+        Assert.That(_engine.IsArmed, Is.False);
+
+        // 1. Pressiona Back e Start juntos no controle
+        var buttons = new Dictionary<GamepadButton, bool>
+        {
+            [GamepadButton.Back] = true,
+            [GamepadButton.Start] = true
+        };
+        _engine.ProcessSnapshot(CreateSnapshotWithButtons(buttons));
+
+        Assert.That(_engine.IsArmed, Is.True, "Pressionar Back+Start deve armar o motor diretamente pelo gamepad.");
+
+        // 2. Libera os botões
+        buttons[GamepadButton.Back] = false;
+        buttons[GamepadButton.Start] = false;
+        _engine.ProcessSnapshot(CreateSnapshotWithButtons(buttons));
+        Assert.That(_engine.IsArmed, Is.True);
+
+        // 3. Pressiona Back e Start juntos novamente
+        buttons[GamepadButton.Back] = true;
+        buttons[GamepadButton.Start] = true;
+        _engine.ProcessSnapshot(CreateSnapshotWithButtons(buttons));
+
+        Assert.That(_engine.IsArmed, Is.False, "Pressionar Back+Start novamente deve desarmar o motor imediatamente.");
+    }
+
+    [Test]
+    public void ShiftModifier_WhenHeld_SwitchesToShiftBindings()
+    {
+        _engine.Arm();
+        _profile.ShiftModifier = GamepadButton.LeftShoulder;
+        _profile.ButtonBindings[GamepadButton.A] = InputAction.FromKey(VirtualKey.Space);
+        _profile.ShiftBindings[GamepadButton.A] = InputAction.FromKey(VirtualKey.D1);
+
+        // 1. Pressiona A sem Shift (LB) -> deve acionar Espaço
+        var pressAWithoutShift = new Dictionary<GamepadButton, bool>
+        {
+            [GamepadButton.LeftShoulder] = false,
+            [GamepadButton.A] = true
+        };
+        _engine.ProcessSnapshot(CreateSnapshotWithButtons(pressAWithoutShift));
+
+        Assert.That(_sink.RecordedEvents.Count, Is.EqualTo(1));
+        Assert.That(_sink.RecordedEvents[0].Key, Is.EqualTo(VirtualKey.Space));
+
+        // Solta A
+        pressAWithoutShift[GamepadButton.A] = false;
+        _engine.ProcessSnapshot(CreateSnapshotWithButtons(pressAWithoutShift));
+        _sink.Clear();
+
+        // 2. Segura Shift (LB) e pressiona A -> deve acionar D1
+        var pressAWithShift = new Dictionary<GamepadButton, bool>
+        {
+            [GamepadButton.LeftShoulder] = true,
+            [GamepadButton.A] = true
+        };
+        _engine.ProcessSnapshot(CreateSnapshotWithButtons(pressAWithShift));
+
+        Assert.That(_sink.RecordedEvents.Count, Is.EqualTo(1));
+        Assert.That(_sink.RecordedEvents[0].Key, Is.EqualTo(VirtualKey.D1));
+    }
+
+    [Test]
+    public void TurboMode_PulsesAction_WhenHeld()
+    {
+        _engine.Arm();
+        _profile.ButtonBindings[GamepadButton.A] = InputAction.FromKey(VirtualKey.Space, isTurbo: true);
+
+        var t0 = new DateTime(2026, 10, 26, 12, 0, 0, DateTimeKind.Utc);
+
+        // 1. Pressiona A no frame t0 -> KeyDown
+        var pressButtons = new Dictionary<GamepadButton, bool> { [GamepadButton.A] = true };
+        _engine.ProcessSnapshot(CreateSnapshotWithButtons(pressButtons, timestamp: t0));
+
+        Assert.That(_sink.RecordedEvents.Count, Is.EqualTo(1));
+        Assert.That(_sink.RecordedEvents[0].EventType, Is.EqualTo(InputEventType.KeyDown));
+
+        // 2. Continua segurando em t0 + 60ms (> 50ms) -> deve pulsar para KeyUp
+        var t1 = t0.AddMilliseconds(60);
+        _engine.ProcessSnapshot(CreateSnapshotWithButtons(pressButtons, timestamp: t1));
+
+        Assert.That(_sink.RecordedEvents.Count, Is.EqualTo(2));
+        Assert.That(_sink.RecordedEvents[1].EventType, Is.EqualTo(InputEventType.KeyUp));
+
+        // 3. Continua segurando em t0 + 120ms (> 50ms) -> deve pulsar novamente para KeyDown
+        var t2 = t0.AddMilliseconds(120);
+        _engine.ProcessSnapshot(CreateSnapshotWithButtons(pressButtons, timestamp: t2));
+
+        Assert.That(_sink.RecordedEvents.Count, Is.EqualTo(3));
+        Assert.That(_sink.RecordedEvents[2].EventType, Is.EqualTo(InputEventType.KeyDown));
+
+        // 4. Solta A em t0 + 150ms -> garante que solta o input e encerra turbo
+        var t3 = t0.AddMilliseconds(150);
+        var releaseButtons = new Dictionary<GamepadButton, bool> { [GamepadButton.A] = false };
+        _engine.ProcessSnapshot(CreateSnapshotWithButtons(releaseButtons, timestamp: t3));
+
+        Assert.That(_sink.RecordedEvents.Count, Is.EqualTo(4));
+        Assert.That(_sink.RecordedEvents[3].EventType, Is.EqualTo(InputEventType.KeyUp));
+    }
+
+    private static ControllerSnapshot CreateSnapshotWithButtons(
+        Dictionary<GamepadButton, bool> activeButtons,
+        DateTime? timestamp = null,
+        string deviceId = "test-controller")
+    {
+        var buttons = new Dictionary<GamepadButton, bool>();
+        foreach (GamepadButton b in Enum.GetValues<GamepadButton>())
+        {
+            buttons[b] = false;
+        }
+        foreach (var (k, v) in activeButtons)
+        {
+            buttons[k] = v;
+        }
+
+        var axes = new Dictionary<GamepadAxis, float>();
+        foreach (GamepadAxis a in Enum.GetValues<GamepadAxis>())
+        {
+            axes[a] = 0.0f;
+        }
+
+        return new ControllerSnapshot(deviceId, "Test Controller", true, timestamp ?? DateTime.UtcNow, buttons, axes);
+    }
+
     private static ControllerSnapshot CreateSnapshot(
         GamepadButton button,
         bool pressed,

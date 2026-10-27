@@ -153,7 +153,7 @@ public class MainViewModel : ViewModelBase, IDisposable
 
     public MainViewModel()
     {
-        _dispatcher = Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher;
+        _dispatcher = System.Windows.Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher;
         _profileStore = new JsonProfileStore();
         _inputSink = new Win32SendInputSink();
 
@@ -329,7 +329,7 @@ public class MainViewModel : ViewModelBase, IDisposable
     {
         ApplyCurrentBindingsToEngine();
 
-        var dialog = new SaveFileDialog
+        var dialog = new Microsoft.Win32.SaveFileDialog
         {
             Filter = "Perfis OpenPad (*.json)|*.json",
             DefaultExt = ".json",
@@ -346,14 +346,14 @@ public class MainViewModel : ViewModelBase, IDisposable
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Erro ao salvar perfil: {ex.Message}", "Erro", MessageBoxButton.OK, MessageBoxImage.Error);
+                System.Windows.MessageBox.Show($"Erro ao salvar perfil: {ex.Message}", "Erro", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
     }
 
     private void LoadProfile()
     {
-        var dialog = new OpenFileDialog
+        var dialog = new Microsoft.Win32.OpenFileDialog
         {
             Filter = "Perfis OpenPad (*.json)|*.json",
             DefaultExt = ".json"
@@ -371,7 +371,7 @@ public class MainViewModel : ViewModelBase, IDisposable
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Erro ao carregar perfil: {ex.Message}", "Erro", MessageBoxButton.OK, MessageBoxImage.Error);
+                System.Windows.MessageBox.Show($"Erro ao carregar perfil: {ex.Message}", "Erro", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
     }

@@ -23,6 +23,12 @@ public class MappingProfile
     [JsonPropertyName("buttonBindings")]
     public Dictionary<GamepadButton, InputAction> ButtonBindings { get; set; } = new();
 
+    [JsonPropertyName("shiftModifier")]
+    public GamepadButton? ShiftModifier { get; set; } = null;
+
+    [JsonPropertyName("shiftBindings")]
+    public Dictionary<GamepadButton, InputAction> ShiftBindings { get; set; } = new();
+
     [JsonPropertyName("triggerBindings")]
     public Dictionary<GamepadAxis, InputAction> TriggerBindings { get; set; } = new();
 
