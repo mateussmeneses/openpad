@@ -1,5 +1,9 @@
 # OpenPad 🎮
 
+[![OpenPad CI/CD](https://github.com/mateussmeneses/openpad/actions/workflows/ci.yml/badge.svg)](https://github.com/mateussmeneses/openpad/actions/workflows/ci.yml)
+[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)](https://github.com/mateussmeneses/openpad/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 **Open-source Gamepad-to-Keyboard/Mouse Remapper for Windows**
 
 OpenPad é uma aplicação Windows moderna e segura para remapear botões de controles (Xbox, PlayStation, genéricos) para teclas de teclado e botões do mouse. Construído com C#/.NET 10, WPF (MVVM), SDL3 e APIs Win32 nativas.
@@ -8,20 +12,37 @@ Licenciado sob [MIT License](LICENSE).
 
 ---
 
-## 🌟 Recursos do MVP (v0.1)
+## 🌟 Recursos e Evoluções (v0.2.0)
 
-- **Detecção Nativa com SDL3**: Suporte completo a gamepads modernos via SDL3 Gamepad API nativa (x64) empacotada.
-- **Monitoramento em Tempo Real**: Visualização ao vivo dos botões pressionados, direcionais (D-Pad), gatilhos analógicos e analógicos (sticks).
-- **Mapeamento Flexível**: Configure qualquer botão do controle para disparar uma tecla do teclado (códigos Win32 Virtual-Key) ou botão do mouse (Esquerdo, Direito, Meio, Avançar/Voltar).
-- **Perfis Versionados em JSON**: Salve, carregue e restaure perfis com validação de esquema (`schemaVersion`), nomes e limites de zonas mortas.
+- **Troca Automática de Perfis por Jogo (`AutoProfileManager`)**:
+  - Monitoramento contínuo em segundo plano do processo em primeiro plano (`GetForegroundWindow`).
+  - Associação de perfis a executáveis (ex: `notepad.exe`, `Doom.exe`).
+  - Alternância atômica e segura com liberação imediata de quaisquer inputs retidos.
+- **Feedback Háptico com Vibração SDL3 (`SDL.RumbleGamepad`)**:
+  - Pulso curto e nítido (35.000 de intensidade) ao **Ativar / Armar**.
+  - Pulso grave e firme (40.000 de intensidade) ao **Desarmar / Emergência**.
+  - Vibração de gatilhos acionados para sensação tátil instantânea.
+- **Curvas de Resposta de Analógicos Customizáveis**:
+  - Modos configuráveis: **Linear**, **Quadrática** (precisão cirúrgica no centro), **Agressiva** (resposta rápida para ação e FPS) e **Suave** (s-curve para pilotagem/simuladores).
+  - Normalização radial e filtragem estrita de zona morta (*deadzone*).
+- **Integração com Área de Notificação (System Tray)**:
+  - Ícone dinâmico com status de arme (Verde: Armado, Cinza/Vermelho: Desarmado).
+  - Opções para minimizar para a bandeja e fechar para a bandeja.
+  - Menu de contexto na bandeja com comandos rápidos: Ativar, Desarmar, Abrir Janela e Fechar.
+- **Atalhos Globais e Combinação no Controle**:
+  - Atalho global de teclado Win32: `Ctrl + Shift + F12` para alternar entre Armar/Desarmar.
+  - Atalho físico no controle: Segurar **Back + Start** (ou View + Menu) por 1,2 segundos para alternar o arme com feedback tátil.
+- **Detecção Nativa com SDL3**:
+  - Suporte completo a gamepads modernos via SDL3 Gamepad API nativa (x64) empacotada.
+  - Monitoramento em tempo real a 120 Hz de eixos, botões e gatilhos.
+- **Mapeamento Flexível**:
+  - Configure qualquer botão do controle para disparar uma tecla do teclado (códigos Win32 Virtual-Key) ou botão do mouse.
+- **Perfis Versionados em JSON**:
+  - Salve, carregue e restaure perfis com validação de esquema (`schemaVersion`).
 - **Segurança e Confiabilidade por Padrão**:
-  - Inicia sempre **DESARMADO** (*DISARMED*). Nenhuma tecla ou clique é enviado até o usuário clicar em **ATIVAR**.
+  - Inicia sempre **DESARMADO** (*DISARMED*).
   - **Liberação Garantida de Inputs**: Ao desarmar, desconectar o controle, alternar de perfil ou fechar a janela, todas as teclas virtuais e botões do mouse pressionados são liberados imediatamente via `ReleaseAll()`.
-  - Botão de **Emergência: Desarmar** sempre acessível na interface.
-- **Limpo e Não Invasivo**:
-  - Utiliza `SendInput` do Win32.
-  - **Zero** drivers virtuais proprietários ou não assinados no MVP.
-  - **Zero** injeção de processos, ganchos globais de teclado (*keylogger*), alteração de memória de jogos ou requisitos de privilégios de Administrador.
+  - Zero drivers proprietários não assinados, zero injeção de processos ou riscos de banimento de anti-cheat.
 
 ---
 
