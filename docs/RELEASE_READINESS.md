@@ -11,11 +11,12 @@
 | Critério | Meta | Evidência / Status | Avaliação |
 |---|---|---|:---:|
 | **Compilação Release** | 0 avisos, 0 erros | `dotnet build --warnaserror` conclui com 0 avisos e 0 erros. | ✅ APROVADO |
-| **Suíte de Testes Automatizados** | 100% de sucesso | 182 testes unitários e de ciclo de vida aprovados no NUnit. | ✅ APROVADO |
-| **Validação de Retorno Win32** | SendInput verificado | Retorno inteiro verificado e captura de `GetLastError()` implementada. | ✅ APROVADO |
-| **Isolamento de Dispositivos** | Zero contaminação cruzada | `DeviceInputState` e contagem de referências implementadas e testadas. | ✅ APROVADO |
-| **Homologação do Ciclo de Vida** | 10 passos determinísticos | Teste automatizado cobrindo conexão, desarme, desconexão e dispose. | ✅ APROVADO |
-| **Empacotamento Portátil** | `SDL3.dll` incluída no executável | Target no `OpenPad.App.csproj` copia DLL nativa para a raiz de `publish/`. | ✅ APROVADO |
+| **Suíte de Testes Automatizados** | 100% de sucesso | 186 testes unitários e de ciclo de vida aprovados no NUnit. | ✅ APROVADO |
+| **Validação e Resiliência Win32** | SendInput e liberações pendentes | Retorno inteiro validado, tracking de `PendingReleaseKeys` e `RetryPendingReleases()`. | ✅ APROVADO |
+| **Isolamento por Entrada Física** | Zero contaminação cruzada | Entradas físicas rastreadas individualmente por controle com contadores de referência. | ✅ APROVADO |
+| **Isolamento de Atalho de Arme** | Combo `Back + Start` por controle | Detecção de combo desacoplada por dispositivo sem interferência mútua. | ✅ APROVADO |
+| **Homologação do Ciclo de Vida** | 10 passos determinísticos | Teste automatizado cobrindo conexão, desarme, desconexão, troca de perfil e dispose. | ✅ APROVADO |
+| **Empacotamento Portátil Estrito** | Falha de compilação se `SDL3.dll` ausente | Verificação estrita no MSBuild e empacotamento ZIP + SHA-256 no GitHub Actions. | ✅ APROVADO |
 | **Documentação Transparente** | Diferenciação real vs experimental | `README.md` e `docs/ARCHITECTURE.md` reclassificados. | ✅ APROVADO |
 | **Homologação em Hardware Físico** | Testes manuais com gamepads reais | Pendente execução física por usuário / jogador no ambiente de destino. | ⏳ PENDENTE |
 

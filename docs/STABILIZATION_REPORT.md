@@ -8,23 +8,26 @@
 
 ## 1. Problemas P0 Identificados e Corrigidos
 
-### 1.1 Win32 SendInput — Validação de Retorno e Tratamento de Erros
-- **Sintoma / Falha:** `Win32SendInputSink.cs` chamava `SendInput()` sem verificar o valor de retorno inteiro (que indica quantos eventos foram efetivamente inseridos na fila do sistema operacional). Em caso de bloqueio por integridade (UIPI), permissões ou tela de segurança do Windows, a API retornava 0, mas a classe inseria a tecla em `_pressedKeys` cegamente, corrompendo o estado interno. Além disso, não era possível testar falhas de injeção unitariamente.
+### 1.1 Win32 SendInput — Validação de Retorno, Recuperação e Liberação Pendente
+- **Sintoma / Falha:** `Win32SendInputSink.cs` chamava `SendInput()` sem verificar o valor de retorno inteiro (que indica quantos eventos foram efetivamente inseridos na fila do SO). Além disso, em chamadas a `SendKeyUp` que falhassem por UIPI ou bloqueios do Windows, a classe removia a tecla de `_pressedKeys`, abandonando a tecla fisicamente travada no sistema operacional sem registro nem capacidade de recuperação.
 - **Correção Implementada:**
-  - Criado o delegate `SendInputNativeHandler`, permitindo injeção do chamador nativo para testes e simulação de falhas.
-  - Implementada verificação estrita: se `sent == 0`, o erro do Windows é capturado via `Marshal.GetLastWin32Error()`, o contador `FailedEventCount` é incrementado, a falha é registrada nos diagnósticos e a tecla **não** é adicionada a `_pressedKeys`.
-  - Em `SendKeyUp`, a tecla é removida de `_pressedKeys` incondicionalmente, garantindo que o estado não retenha teclas fictícias.
-  - Criada a suíte `tests/OpenPad.Tests/Win32SendInputSinkTests.cs` simulando retornos com sucesso e retornos com recusa de injeção (0).
+  - `IInputSink` e `Win32SendInputSink` foram atualizados para retornar `bool` em todas as operações de injeção.
+  - Implementado rastreamento de liberações pendentes (`PendingReleaseKeys` e `PendingReleaseMouseButtons`). Quando o sistema operacional recusa o evento `KeyUp`, a tecla **permanece** em `_pressedKeys` e é registrada em `PendingReleaseKeys`, com emissão de log diagnóstico estruturado.
+  - Criado o método de recuperação `RetryPendingReleases()`, executado reativamente no início de cada ciclo do `MappingEngine`, recuperando as teclas assim que o foco do sistema operacional é restabelecido.
+  - Delegate `SendInputNativeHandler` permite injeção nativa simulada em testes unitários.
+  - Testes em `Win32SendInputSinkTests.cs` cobrem injeções com sucesso, rejeições com retenção de pendência e recuperação completa via `RetryPendingReleases`.
 
-### 1.2 Isolamento de Múltiplos Controles no MappingEngine
-- **Sintoma / Falha:** O `MappingEngine` mantinha um único `_activeDeviceId` e dicionários globais de botões anteriores (`_previousButtonStates`). Quando dois controles estavam conectados, o snapshot do Controle 2 sobrescrevia o estado do Controle 1, fazendo com que a soltura de um botão no Controle 2 gerasse um evento `KeyUp` que desativava a tecla que o Controle 1 ainda estava pressionando. Além disso, a desconexão de um controle liberava inputs globais de todos os jogadores.
+### 1.2 Modelo de Contagem de Referências por Entrada Física no MappingEngine
+- **Sintoma / Falha:** A implementação anterior mantinha apenas um `HashSet<VirtualKey>` por dispositivo. Se dois botões físicos do **mesmo** controle fossem mapeados para a mesma saída (ex: Botão A → Espaço, Botão B → Espaço), ao pressionar A, depois B, e soltar A, o sistema removia Espaço do `HashSet` e liberava prematuramente a tecla, mesmo com B ainda mantido pelo usuário.
 - **Correção Implementada:**
-  - Criada a classe interna `DeviceInputState`, encapsulando os estados de botões, gatilhos analógicos, turbo e teclas seguradas individualmente para cada controle conectado.
-  - Implementada contagem de referências (`_virtualKeyRefCounts` e `_mouseButtonRefCounts`) para quando múltiplos controles possuem botões mapeados para a mesma tecla de saída.
-  - O evento `KeyDown` só é emitido no primeiro acionamento; solturas intermediárias de outros controles apenas decrementam o contador de referências. O `KeyUp` só é emitido quando o último controle solta o botão.
-  - Ao desconectar um controle com múltiplos controles ativos, apenas os inputs do dispositivo desconectado são liberados, preservando os demais jogadores.
-  - Caso todos os controles sejam desconectados, executa-se a limpeza segura com `ReleaseAll()`.
-  - Criada a suíte `tests/OpenPad.Tests/MappingLifecycleTests.cs` comprovando o isolamento de múltiplos controles e a contagem de referências.
+  - O `DeviceInputState` foi refatorado para rastrear a origem da entrada física:
+    - `ActiveButtonVirtualKeys` / `ActiveButtonMouseButtons` (mapeamento por `GamepadButton`).
+    - `ActiveTriggerVirtualKeys` / `ActiveTriggerMouseButtons` (mapeamento por `GamepadAxis`).
+  - O contador de referências global (`_virtualKeyRefCounts` e `_mouseButtonRefCounts`) contabiliza a quantidade total de **entradas físicas ativas** (do mesmo dispositivo ou de controles concorrentes) que exigem aquela saída sintética.
+  - A saída só é liberada com `SendKeyUp` quando **nenhuma entrada física ativa** exigir mais aquela tecla.
+  - Ao desconectar um controle, todas as suas entradas físicas ativas são desassociadas de forma granular, mantendo as entradas de outros jogadores intocadas.
+  - O atalho físico `Back + Start` foi isolado por dispositivo (`WasArmComboActive` no `DeviceInputState`), impedindo que snapshots alternados de múltiplos gamepads cancelem a detecção do combo.
+  - Testes em `MappingLifecycleTests.cs` validam o cenário reproduzível (A+B para Espaço), combinações de botão e gatilho, e alternância de múltiplos gamepads.
 
 ### 1.3 Homologação do Ciclo de Vida do Remapeamento
 - **Sintoma / Falha:** Ausência de testes automatizados sistemáticos validando o ciclo de vida de 10 passos estipulado nos critérios de aceitação.
@@ -45,9 +48,9 @@
 
 ## 2. Melhorias P1 e Empacotamento Windows
 
-### 2.1 Empacotamento Nativo do SDL3
-- Adicionado target automático no `OpenPad.App.csproj` para copiar `SDL3.dll` da pasta nativa x64 (`runtimes/win-x64/native/SDL3.dll`) diretamente para a raiz do pacote portátil publicado em `publish/`.
-- Permite que o usuário final execute `OpenPad.App.exe` sem necessidade de instalar dependências externas ou drivers de terceiros.
+### 2.1 Empacotamento Portátil Estrito e Verificação do SDL3
+- Target `CopySDL3NativeDll` no `OpenPad.App.csproj` configurado com verificação estrita: em publicações para `win-x64`, a compilação falha imediatamente se `SDL3.dll` não for copiada para o diretório de publicação.
+- Pipeline do GitHub Actions configurada para verificar a presença de `SDL3.dll` e `OpenPad.App.exe`, comprimir o artefato portátil `OpenPad-win-x64.zip`, calcular o hash SHA-256 e anexar ambos como artefatos da release.
 
 ---
 
