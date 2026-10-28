@@ -29,7 +29,11 @@ public class RecordingInputSink : IInputSink
     private readonly List<RecordedInputEvent> _events = new();
     private readonly HashSet<VirtualKey> _pressedKeys = new();
     private readonly HashSet<MouseButton> _pressedMouseButtons = new();
+    private readonly HashSet<VirtualKey> _pendingReleaseKeys = new();
+    private readonly HashSet<MouseButton> _pendingReleaseMouseButtons = new();
     private readonly object _lock = new();
+
+    public bool SimulateFailures { get; set; } = false;
 
     public IReadOnlyList<RecordedInputEvent> RecordedEvents
     {
@@ -55,57 +59,115 @@ public class RecordingInputSink : IInputSink
         }
     }
 
-    public void SendKeyDown(VirtualKey key)
+    public IReadOnlySet<VirtualKey> PendingReleaseKeys
+    {
+        get
+        {
+            lock (_lock) return new HashSet<VirtualKey>(_pendingReleaseKeys);
+        }
+    }
+
+    public IReadOnlySet<MouseButton> PendingReleaseMouseButtons
+    {
+        get
+        {
+            lock (_lock) return new HashSet<MouseButton>(_pendingReleaseMouseButtons);
+        }
+    }
+
+    public bool SendKeyDown(VirtualKey key)
     {
         lock (_lock)
         {
             _events.Add(new RecordedInputEvent(InputEventType.KeyDown, key, null, DateTime.UtcNow));
+            if (SimulateFailures) return false;
             _pressedKeys.Add(key);
+            return true;
         }
     }
 
-    public void SendKeyUp(VirtualKey key)
+    public bool SendKeyUp(VirtualKey key)
     {
         lock (_lock)
         {
             _events.Add(new RecordedInputEvent(InputEventType.KeyUp, key, null, DateTime.UtcNow));
+            if (SimulateFailures)
+            {
+                _pendingReleaseKeys.Add(key);
+                return false;
+            }
             _pressedKeys.Remove(key);
+            _pendingReleaseKeys.Remove(key);
+            return true;
         }
     }
 
-    public void SendMouseDown(MouseButton button)
+    public bool SendMouseDown(MouseButton button)
     {
         lock (_lock)
         {
             _events.Add(new RecordedInputEvent(InputEventType.MouseDown, null, button, DateTime.UtcNow));
+            if (SimulateFailures) return false;
             _pressedMouseButtons.Add(button);
+            return true;
         }
     }
 
-    public void SendMouseUp(MouseButton button)
+    public bool SendMouseUp(MouseButton button)
     {
         lock (_lock)
         {
             _events.Add(new RecordedInputEvent(InputEventType.MouseUp, null, button, DateTime.UtcNow));
+            if (SimulateFailures)
+            {
+                _pendingReleaseMouseButtons.Add(button);
+                return false;
+            }
             _pressedMouseButtons.Remove(button);
+            _pendingReleaseMouseButtons.Remove(button);
+            return true;
         }
     }
 
-    public void SendMouseMove(int dx, int dy)
+    public bool SendMouseMove(int dx, int dy)
     {
         lock (_lock)
         {
             _events.Add(new RecordedInputEvent(InputEventType.MouseMove, null, null, DateTime.UtcNow, dx, dy));
+            return !SimulateFailures;
         }
     }
 
-    public void ReleaseAll()
+    public bool ReleaseAll()
     {
         lock (_lock)
         {
             _events.Add(new RecordedInputEvent(InputEventType.ReleaseAll, null, null, DateTime.UtcNow));
+            if (SimulateFailures)
+            {
+                foreach (var k in _pressedKeys) _pendingReleaseKeys.Add(k);
+                foreach (var b in _pressedMouseButtons) _pendingReleaseMouseButtons.Add(b);
+                return false;
+            }
             _pressedKeys.Clear();
             _pressedMouseButtons.Clear();
+            _pendingReleaseKeys.Clear();
+            _pendingReleaseMouseButtons.Clear();
+            return true;
+        }
+    }
+
+    public int RetryPendingReleases()
+    {
+        lock (_lock)
+        {
+            if (SimulateFailures) return 0;
+            int count = _pendingReleaseKeys.Count + _pendingReleaseMouseButtons.Count;
+            _pressedKeys.ExceptWith(_pendingReleaseKeys);
+            _pressedMouseButtons.ExceptWith(_pendingReleaseMouseButtons);
+            _pendingReleaseKeys.Clear();
+            _pendingReleaseMouseButtons.Clear();
+            return count;
         }
     }
 
@@ -116,6 +178,8 @@ public class RecordingInputSink : IInputSink
             _events.Clear();
             _pressedKeys.Clear();
             _pressedMouseButtons.Clear();
+            _pendingReleaseKeys.Clear();
+            _pendingReleaseMouseButtons.Clear();
         }
     }
 

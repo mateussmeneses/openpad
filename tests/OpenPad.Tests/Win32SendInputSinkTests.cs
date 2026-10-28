@@ -41,7 +41,7 @@ public class Win32SendInputSinkTests
     }
 
     [Test]
-    public void SendKeyUp_AlwaysRemovesKeyFromPressedSet()
+    public void SendKeyUp_WhenNativeSucceeds_RemovesKeyFromPressedSetAndPending()
     {
         uint mockHandler(uint nInputs, Win32SendInputSink.NativeInput[] pInputs, int cbSize) => nInputs;
 
@@ -52,6 +52,37 @@ public class Win32SendInputSinkTests
 
         sink.SendKeyUp(VirtualKey.Space);
         Assert.That(sink.CurrentlyPressedKeys, Does.Not.Contain(VirtualKey.Space));
+        Assert.That(sink.PendingReleaseKeys, Does.Not.Contain(VirtualKey.Space));
+    }
+
+    [Test]
+    public void SendKeyUp_WhenNativeFails_RetainsKeyInPendingReleaseSetAndDoesNotForget()
+    {
+        bool fail = false;
+        uint mockHandler(uint nInputs, Win32SendInputSink.NativeInput[] pInputs, int cbSize) => fail ? 0 : nInputs;
+
+        using var sink = new Win32SendInputSink(mockHandler);
+
+        // KeyDown sucede
+        sink.SendKeyDown(VirtualKey.Space);
+        Assert.That(sink.CurrentlyPressedKeys, Contains.Item(VirtualKey.Space));
+
+        // KeyUp falha no SO (ex: UIPI / bloqueio do Windows)
+        fail = true;
+        bool ok = sink.SendKeyUp(VirtualKey.Space);
+
+        Assert.That(ok, Is.False);
+        // O sistema NÃO PODE esquecer a tecla! Deve mantê-la rastreada
+        Assert.That(sink.CurrentlyPressedKeys, Contains.Item(VirtualKey.Space));
+        Assert.That(sink.PendingReleaseKeys, Contains.Item(VirtualKey.Space));
+
+        // Recuperação posterior: OS destrava e RetryPendingReleases consegue enviar
+        fail = false;
+        int recovered = sink.RetryPendingReleases();
+
+        Assert.That(recovered, Is.EqualTo(1));
+        Assert.That(sink.CurrentlyPressedKeys, Does.Not.Contain(VirtualKey.Space));
+        Assert.That(sink.PendingReleaseKeys, Does.Not.Contain(VirtualKey.Space));
     }
 
     [Test]

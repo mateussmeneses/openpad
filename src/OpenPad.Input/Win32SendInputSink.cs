@@ -75,12 +75,19 @@ public class Win32SendInputSink : IInputSink
     private readonly object _syncLock = new();
     private readonly HashSet<VirtualKey> _pressedKeys = new();
     private readonly HashSet<MouseButton> _pressedMouseButtons = new();
+    private readonly HashSet<VirtualKey> _pendingReleaseKeys = new();
+    private readonly HashSet<MouseButton> _pendingReleaseMouseButtons = new();
     private bool _disposed = false;
 
     public int LastWin32Error { get; private set; }
     public long SuccessfulEventCount { get; private set; }
     public long FailedEventCount { get; private set; }
     public event EventHandler<string>? DiagnosticsLogged;
+
+    private void LogDiagnostics(string message)
+    {
+        DiagnosticsLogged?.Invoke(this, $"[{DateTime.Now:HH:mm:ss.fff}] {message}");
+    }
 
     public IReadOnlySet<VirtualKey> CurrentlyPressedKeys
     {
@@ -98,6 +105,22 @@ public class Win32SendInputSink : IInputSink
         }
     }
 
+    public IReadOnlySet<VirtualKey> PendingReleaseKeys
+    {
+        get
+        {
+            lock (_syncLock) return new HashSet<VirtualKey>(_pendingReleaseKeys);
+        }
+    }
+
+    public IReadOnlySet<MouseButton> PendingReleaseMouseButtons
+    {
+        get
+        {
+            lock (_syncLock) return new HashSet<MouseButton>(_pendingReleaseMouseButtons);
+        }
+    }
+
     public Win32SendInputSink() : this(SendInput)
     {
     }
@@ -107,91 +130,176 @@ public class Win32SendInputSink : IInputSink
         _sendInputNative = sendInputNative ?? throw new ArgumentNullException(nameof(sendInputNative));
     }
 
-    public void SendKeyDown(VirtualKey key)
+    public bool SendKeyDown(VirtualKey key)
     {
-        if (key == VirtualKey.None) return;
+        if (key == VirtualKey.None) return false;
 
         lock (_syncLock)
         {
-            if (_disposed) return;
+            if (_disposed) return false;
             bool ok = SendKeyInputNative((ushort)key, KEYEVENTF_KEYDOWN);
             if (ok)
             {
                 _pressedKeys.Add(key);
+                _pendingReleaseKeys.Remove(key);
+                return true;
+            }
+            return false;
+        }
+    }
+
+    public bool SendKeyUp(VirtualKey key)
+    {
+        if (key == VirtualKey.None) return false;
+
+        lock (_syncLock)
+        {
+            if (_disposed) return false;
+            bool ok = SendKeyInputNative((ushort)key, KEYEVENTF_KEYUP);
+            if (ok)
+            {
+                _pressedKeys.Remove(key);
+                _pendingReleaseKeys.Remove(key);
+                return true;
+            }
+            else
+            {
+                // Liberação falhou no SO: não esquecemos a tecla! Mantemos em pending para recuperação
+                _pendingReleaseKeys.Add(key);
+                LogDiagnostics($"Falha ao enviar KeyUp para {key} (Win32 Error: {LastWin32Error}). Tecla retida em liberação pendente.");
+                return false;
             }
         }
     }
 
-    public void SendKeyUp(VirtualKey key)
-    {
-        if (key == VirtualKey.None) return;
-
-        lock (_syncLock)
-        {
-            if (_disposed) return;
-            SendKeyInputNative((ushort)key, KEYEVENTF_KEYUP);
-            _pressedKeys.Remove(key);
-        }
-    }
-
-    public void SendMouseDown(MouseButton button)
+    public bool SendMouseDown(MouseButton button)
     {
         lock (_syncLock)
         {
-            if (_disposed) return;
+            if (_disposed) return false;
             var (flags, data) = GetMouseDownFlags(button);
             bool ok = SendMouseInputNative(flags, data, 0, 0);
             if (ok)
             {
                 _pressedMouseButtons.Add(button);
+                _pendingReleaseMouseButtons.Remove(button);
+                return true;
             }
+            return false;
         }
     }
 
-    public void SendMouseUp(MouseButton button)
+    public bool SendMouseUp(MouseButton button)
     {
         lock (_syncLock)
         {
-            if (_disposed) return;
+            if (_disposed) return false;
             var (flags, data) = GetMouseUpFlags(button);
-            SendMouseInputNative(flags, data, 0, 0);
-            _pressedMouseButtons.Remove(button);
+            bool ok = SendMouseInputNative(flags, data, 0, 0);
+            if (ok)
+            {
+                _pressedMouseButtons.Remove(button);
+                _pendingReleaseMouseButtons.Remove(button);
+                return true;
+            }
+            else
+            {
+                _pendingReleaseMouseButtons.Add(button);
+                LogDiagnostics($"Falha ao enviar MouseUp para {button} (Win32 Error: {LastWin32Error}). Botão retido em liberação pendente.");
+                return false;
+            }
         }
     }
 
-    public void SendMouseMove(int dx, int dy)
+    public bool SendMouseMove(int dx, int dy)
     {
-        if (dx == 0 && dy == 0) return;
+        if (dx == 0 && dy == 0) return true;
 
         lock (_syncLock)
         {
-            if (_disposed) return;
-            SendMouseInputNative(MOUSEEVENTF_MOVE, 0, dx, dy);
+            if (_disposed) return false;
+            return SendMouseInputNative(MOUSEEVENTF_MOVE, 0, dx, dy);
         }
     }
 
-    public void ReleaseAll()
+    public bool ReleaseAll()
     {
         lock (_syncLock)
         {
-            try
-            {
-                foreach (var key in _pressedKeys.ToList())
-                {
-                    SendKeyInputNative((ushort)key, KEYEVENTF_KEYUP);
-                }
+            if (_disposed) return false;
 
-                foreach (var btn in _pressedMouseButtons.ToList())
+            bool allSucceeded = true;
+            foreach (var key in _pressedKeys.ToList())
+            {
+                bool ok = SendKeyInputNative((ushort)key, KEYEVENTF_KEYUP);
+                if (ok)
                 {
-                    var (flags, data) = GetMouseUpFlags(btn);
-                    SendMouseInputNative(flags, data, 0, 0);
+                    _pressedKeys.Remove(key);
+                    _pendingReleaseKeys.Remove(key);
+                }
+                else
+                {
+                    _pendingReleaseKeys.Add(key);
+                    allSucceeded = false;
+                    LogDiagnostics($"ReleaseAll: Falha ao enviar KeyUp para {key} (Win32 Error: {LastWin32Error}).");
                 }
             }
-            finally
+
+            foreach (var btn in _pressedMouseButtons.ToList())
             {
-                _pressedKeys.Clear();
-                _pressedMouseButtons.Clear();
+                var (flags, data) = GetMouseUpFlags(btn);
+                bool ok = SendMouseInputNative(flags, data, 0, 0);
+                if (ok)
+                {
+                    _pressedMouseButtons.Remove(btn);
+                    _pendingReleaseMouseButtons.Remove(btn);
+                }
+                else
+                {
+                    _pendingReleaseMouseButtons.Add(btn);
+                    allSucceeded = false;
+                    LogDiagnostics($"ReleaseAll: Falha ao enviar MouseUp para {btn} (Win32 Error: {LastWin32Error}).");
+                }
             }
+
+            return allSucceeded;
+        }
+    }
+
+    public int RetryPendingReleases()
+    {
+        lock (_syncLock)
+        {
+            if (_disposed || (_pendingReleaseKeys.Count == 0 && _pendingReleaseMouseButtons.Count == 0))
+            {
+                return 0;
+            }
+
+            int recovered = 0;
+            foreach (var key in _pendingReleaseKeys.ToList())
+            {
+                if (SendKeyInputNative((ushort)key, KEYEVENTF_KEYUP))
+                {
+                    _pressedKeys.Remove(key);
+                    _pendingReleaseKeys.Remove(key);
+                    recovered++;
+                    LogDiagnostics($"Recuperação bem-sucedida de KeyUp pendente para {key}.");
+                }
+            }
+
+            foreach (var btn in _pendingReleaseMouseButtons.ToList())
+            {
+                var (flags, data) = GetMouseUpFlags(btn);
+                if (SendMouseInputNative(flags, data, 0, 0))
+                {
+                    _pressedMouseButtons.Remove(btn);
+                    _pendingReleaseMouseButtons.Remove(btn);
+                    recovered++;
+                    LogDiagnostics($"Recuperação bem-sucedida de MouseUp pendente para {btn}.");
+                }
+            }
+
+            return recovered;
         }
     }
 

@@ -18,8 +18,11 @@ public class MappingEngine : IDisposable
         public Dictionary<GamepadButton, bool> PreviousButtonStates { get; } = new();
         public Dictionary<GamepadAxis, bool> PreviousTriggerStates { get; } = new();
         public Dictionary<GamepadButton, (DateTime timestamp, bool isDown, InputAction action)> TurboStates { get; } = new();
-        public HashSet<VirtualKey> HeldVirtualKeys { get; } = new();
-        public HashSet<MouseButton> HeldMouseButtons { get; } = new();
+        public Dictionary<GamepadButton, VirtualKey> ActiveButtonVirtualKeys { get; } = new();
+        public Dictionary<GamepadButton, MouseButton> ActiveButtonMouseButtons { get; } = new();
+        public Dictionary<GamepadAxis, VirtualKey> ActiveTriggerVirtualKeys { get; } = new();
+        public Dictionary<GamepadAxis, MouseButton> ActiveTriggerMouseButtons { get; } = new();
+        public bool WasArmComboActive { get; set; } = false;
 
         public DeviceInputState(string deviceId)
         {
@@ -31,8 +34,11 @@ public class MappingEngine : IDisposable
             PreviousButtonStates.Clear();
             PreviousTriggerStates.Clear();
             TurboStates.Clear();
-            HeldVirtualKeys.Clear();
-            HeldMouseButtons.Clear();
+            ActiveButtonVirtualKeys.Clear();
+            ActiveButtonMouseButtons.Clear();
+            ActiveTriggerVirtualKeys.Clear();
+            ActiveTriggerMouseButtons.Clear();
+            WasArmComboActive = false;
         }
     }
 
@@ -47,7 +53,6 @@ public class MappingEngine : IDisposable
     private readonly Dictionary<string, DeviceInputState> _deviceStates = new();
     private readonly Dictionary<VirtualKey, int> _virtualKeyRefCounts = new();
     private readonly Dictionary<MouseButton, int> _mouseButtonRefCounts = new();
-    private bool _wasArmComboActive = false;
 
     public event EventHandler<bool>? ArmedStateChanged;
     public event EventHandler<MappingProfile>? ProfileChanged;
@@ -167,41 +172,26 @@ public class MappingEngine : IDisposable
         {
             if (_deviceStates.Count > 1)
             {
-                // Múltiplos dispositivos conectados: libera apenas os inputs deste dispositivo isolado
-                foreach (var key in state.HeldVirtualKeys.ToList())
+                // Múltiplos dispositivos conectados: libera apenas as entradas físicas deste dispositivo isolado
+                foreach (var button in state.ActiveButtonVirtualKeys.Keys.ToList())
                 {
-                    if (_virtualKeyRefCounts.TryGetValue(key, out var count))
-                    {
-                        if (count <= 1)
-                        {
-                            _virtualKeyRefCounts.Remove(key);
-                            _inputSink.SendKeyUp(key);
-                        }
-                        else
-                        {
-                            _virtualKeyRefCounts[key] = count - 1;
-                        }
-                    }
+                    ReleasePhysicalButtonUp(state, button);
                 }
-
-                foreach (var btn in state.HeldMouseButtons.ToList())
+                foreach (var button in state.ActiveButtonMouseButtons.Keys.ToList())
                 {
-                    if (_mouseButtonRefCounts.TryGetValue(btn, out var count))
-                    {
-                        if (count <= 1)
-                        {
-                            _mouseButtonRefCounts.Remove(btn);
-                            _inputSink.SendMouseUp(btn);
-                        }
-                        else
-                        {
-                            _mouseButtonRefCounts[btn] = count - 1;
-                        }
-                    }
+                    ReleasePhysicalButtonUp(state, button);
+                }
+                foreach (var axis in state.ActiveTriggerVirtualKeys.Keys.ToList())
+                {
+                    ReleasePhysicalTriggerUp(state, axis);
+                }
+                foreach (var axis in state.ActiveTriggerMouseButtons.Keys.ToList())
+                {
+                    ReleasePhysicalTriggerUp(state, axis);
                 }
 
                 _deviceStates.Remove(deviceId);
-                LogDiagnostics($"Controle desconectado: {deviceId}. Entradas do dispositivo liberadas isoladamente.");
+                LogDiagnostics($"Controle desconectado: {deviceId}. Entradas físicas do dispositivo liberadas isoladamente.");
             }
             else
             {
@@ -230,6 +220,16 @@ public class MappingEngine : IDisposable
         {
             if (_disposed) return;
 
+            // Tentativa de recuperação de entradas com liberação pendente no sink
+            if (_inputSink.PendingReleaseKeys.Count > 0 || _inputSink.PendingReleaseMouseButtons.Count > 0)
+            {
+                int recovered = _inputSink.RetryPendingReleases();
+                if (recovered > 0)
+                {
+                    LogDiagnostics($"Recuperadas {recovered} entradas com liberação pendente.");
+                }
+            }
+
             if (!snapshot.IsConnected)
             {
                 HandleDeviceDisconnectedInternal(snapshot.DeviceId);
@@ -239,18 +239,18 @@ public class MappingEngine : IDisposable
             _activeDeviceId = snapshot.DeviceId;
             var deviceState = GetOrCreateDeviceState(snapshot.DeviceId);
 
-            // 0. Detecção de atalho físico no gamepad para alternar estado Armado/Desarmado (Back + Start)
+            // 0. Detecção de atalho físico no gamepad para alternar estado Armado/Desarmado (Back + Start) isolada por controle
             bool isComboActive = snapshot.IsButtonPressed(GamepadButton.Back) && snapshot.IsButtonPressed(GamepadButton.Start);
-            if (isComboActive && !_wasArmComboActive)
+            if (isComboActive && !deviceState.WasArmComboActive)
             {
-                _wasArmComboActive = true;
+                deviceState.WasArmComboActive = true;
                 ToggleArmed();
-                LogDiagnostics($"Atalho físico de controle (Back+Start) acionado: motor {(_isArmed ? "ARMADO" : "DESARMADO")}");
+                LogDiagnostics($"Atalho físico de controle ({snapshot.DeviceId}: Back+Start) acionado: motor {(_isArmed ? "ARMADO" : "DESARMADO")}");
                 return;
             }
             else if (!isComboActive)
             {
-                _wasArmComboActive = false;
+                deviceState.WasArmComboActive = false;
             }
 
             // Se desarmado, apenas rastreamos estados anteriores para evitar disparo fantasma ao armar
@@ -297,11 +297,11 @@ public class MappingEngine : IDisposable
                 {
                     if (!wasPressed && isPressed)
                     {
-                        DispatchActionDown(action, deviceState);
+                        AssertPhysicalButtonDown(deviceState, button, action);
                     }
                     else if (wasPressed && !isPressed)
                     {
-                        DispatchActionUp(action, deviceState);
+                        ReleasePhysicalButtonUp(deviceState, button);
                     }
                 }
 
@@ -332,7 +332,7 @@ public class MappingEngine : IDisposable
         if (!wasPressed && isPressed)
         {
             // Começou a pressionar: dispara primeiro KeyDown / MouseDown
-            DispatchActionDown(action, deviceState);
+            AssertPhysicalButtonDown(deviceState, button, action);
             deviceState.TurboStates[button] = (timestamp, true, action);
         }
         else if (wasPressed && isPressed)
@@ -344,12 +344,12 @@ public class MappingEngine : IDisposable
                 {
                     if (state.isDown)
                     {
-                        DispatchActionUp(action, deviceState);
+                        ReleasePhysicalButtonUp(deviceState, button);
                         deviceState.TurboStates[button] = (timestamp, false, action);
                     }
                     else
                     {
-                        DispatchActionDown(action, deviceState);
+                        AssertPhysicalButtonDown(deviceState, button, action);
                         deviceState.TurboStates[button] = (timestamp, true, action);
                     }
                 }
@@ -360,7 +360,7 @@ public class MappingEngine : IDisposable
             // Soltou o botão: garante que se estava Down, solte
             if (deviceState.TurboStates.TryGetValue(button, out var state) && state.isDown)
             {
-                DispatchActionUp(action, deviceState);
+                ReleasePhysicalButtonUp(deviceState, button);
             }
             deviceState.TurboStates.Remove(button);
         }
@@ -394,7 +394,7 @@ public class MappingEngine : IDisposable
 
         if (!wasPressed && isPressed)
         {
-            DispatchActionDown(action, deviceState);
+            AssertPhysicalTriggerDown(deviceState, axis, action);
             if (_profile.HapticFeedbackEnabled)
             {
                 _controllerSource?.SetRumble(_activeDeviceId ?? "all", 0, 15000, 30);
@@ -402,7 +402,7 @@ public class MappingEngine : IDisposable
         }
         else if (wasPressed && !isPressed)
         {
-            DispatchActionUp(action, deviceState);
+            ReleasePhysicalTriggerUp(deviceState, axis);
         }
 
         deviceState.PreviousTriggerStates[axis] = isPressed;
@@ -467,14 +467,15 @@ public class MappingEngine : IDisposable
         return Math.Sign(value) * scaled;
     }
 
-    private void DispatchActionDown(InputAction action, DeviceInputState deviceState)
+    private void AssertPhysicalButtonDown(DeviceInputState deviceState, GamepadButton button, InputAction action)
     {
         switch (action.Type)
         {
             case ActionType.Key when action.Key.HasValue:
                 var key = action.Key.Value;
-                if (deviceState.HeldVirtualKeys.Add(key))
+                if (!deviceState.ActiveButtonVirtualKeys.ContainsKey(button))
                 {
+                    deviceState.ActiveButtonVirtualKeys[button] = key;
                     _virtualKeyRefCounts.TryGetValue(key, out int count);
                     _virtualKeyRefCounts[key] = count + 1;
                     if (count == 0)
@@ -486,8 +487,9 @@ public class MappingEngine : IDisposable
 
             case ActionType.MouseButton when action.MouseButton.HasValue:
                 var btn = action.MouseButton.Value;
-                if (deviceState.HeldMouseButtons.Add(btn))
+                if (!deviceState.ActiveButtonMouseButtons.ContainsKey(button))
                 {
+                    deviceState.ActiveButtonMouseButtons[button] = btn;
                     _mouseButtonRefCounts.TryGetValue(btn, out int count);
                     _mouseButtonRefCounts[btn] = count + 1;
                     if (count == 0)
@@ -499,47 +501,107 @@ public class MappingEngine : IDisposable
         }
     }
 
-    private void DispatchActionUp(InputAction action, DeviceInputState deviceState)
+    private void ReleasePhysicalButtonUp(DeviceInputState deviceState, GamepadButton button)
+    {
+        if (deviceState.ActiveButtonVirtualKeys.Remove(button, out var key))
+        {
+            if (_virtualKeyRefCounts.TryGetValue(key, out int count))
+            {
+                if (count <= 1)
+                {
+                    _virtualKeyRefCounts.Remove(key);
+                    _inputSink.SendKeyUp(key);
+                }
+                else
+                {
+                    _virtualKeyRefCounts[key] = count - 1;
+                }
+            }
+        }
+
+        if (deviceState.ActiveButtonMouseButtons.Remove(button, out var btn))
+        {
+            if (_mouseButtonRefCounts.TryGetValue(btn, out int count))
+            {
+                if (count <= 1)
+                {
+                    _mouseButtonRefCounts.Remove(btn);
+                    _inputSink.SendMouseUp(btn);
+                }
+                else
+                {
+                    _mouseButtonRefCounts[btn] = count - 1;
+                }
+            }
+        }
+    }
+
+    private void AssertPhysicalTriggerDown(DeviceInputState deviceState, GamepadAxis axis, InputAction action)
     {
         switch (action.Type)
         {
             case ActionType.Key when action.Key.HasValue:
                 var key = action.Key.Value;
-                if (deviceState.HeldVirtualKeys.Remove(key))
+                if (!deviceState.ActiveTriggerVirtualKeys.ContainsKey(axis))
                 {
-                    if (_virtualKeyRefCounts.TryGetValue(key, out int count))
+                    deviceState.ActiveTriggerVirtualKeys[axis] = key;
+                    _virtualKeyRefCounts.TryGetValue(key, out int count);
+                    _virtualKeyRefCounts[key] = count + 1;
+                    if (count == 0)
                     {
-                        if (count <= 1)
-                        {
-                            _virtualKeyRefCounts.Remove(key);
-                            _inputSink.SendKeyUp(key);
-                        }
-                        else
-                        {
-                            _virtualKeyRefCounts[key] = count - 1;
-                        }
+                        _inputSink.SendKeyDown(key);
                     }
                 }
                 break;
 
             case ActionType.MouseButton when action.MouseButton.HasValue:
                 var btn = action.MouseButton.Value;
-                if (deviceState.HeldMouseButtons.Remove(btn))
+                if (!deviceState.ActiveTriggerMouseButtons.ContainsKey(axis))
                 {
-                    if (_mouseButtonRefCounts.TryGetValue(btn, out int count))
+                    deviceState.ActiveTriggerMouseButtons[axis] = btn;
+                    _mouseButtonRefCounts.TryGetValue(btn, out int count);
+                    _mouseButtonRefCounts[btn] = count + 1;
+                    if (count == 0)
                     {
-                        if (count <= 1)
-                        {
-                            _mouseButtonRefCounts.Remove(btn);
-                            _inputSink.SendMouseUp(btn);
-                        }
-                        else
-                        {
-                            _mouseButtonRefCounts[btn] = count - 1;
-                        }
+                        _inputSink.SendMouseDown(btn);
                     }
                 }
                 break;
+        }
+    }
+
+    private void ReleasePhysicalTriggerUp(DeviceInputState deviceState, GamepadAxis axis)
+    {
+        if (deviceState.ActiveTriggerVirtualKeys.Remove(axis, out var key))
+        {
+            if (_virtualKeyRefCounts.TryGetValue(key, out int count))
+            {
+                if (count <= 1)
+                {
+                    _virtualKeyRefCounts.Remove(key);
+                    _inputSink.SendKeyUp(key);
+                }
+                else
+                {
+                    _virtualKeyRefCounts[key] = count - 1;
+                }
+            }
+        }
+
+        if (deviceState.ActiveTriggerMouseButtons.Remove(axis, out var btn))
+        {
+            if (_mouseButtonRefCounts.TryGetValue(btn, out int count))
+            {
+                if (count <= 1)
+                {
+                    _mouseButtonRefCounts.Remove(btn);
+                    _inputSink.SendMouseUp(btn);
+                }
+                else
+                {
+                    _mouseButtonRefCounts[btn] = count - 1;
+                }
+            }
         }
     }
 
