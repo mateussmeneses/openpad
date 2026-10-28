@@ -4,14 +4,38 @@ using OpenPad.Core.Models;
 namespace OpenPad.Core.Engine;
 
 /// <summary>
-/// Motor de remapeamento desacoplado de UI e hardware.
+/// Motor de remapeamento desacoplado de UI e hardware com isolamento completo por dispositivo.
 /// Converte eventos semânticos do controle em comandos do InputSink.
 /// Garante que o sistema inicie desarmado e que nenhum input permaneça
 /// pressionado ao desarmar, desconectar, trocar perfil ou encerrar.
-/// Suporta botões, gatilhos analógicos e movimentação de mouse por stick analógico.
+/// Suporta contagem de referências para múltiplos controles simultâneos sem contaminação cruzada.
 /// </summary>
 public class MappingEngine : IDisposable
 {
+    private sealed class DeviceInputState
+    {
+        public string DeviceId { get; }
+        public Dictionary<GamepadButton, bool> PreviousButtonStates { get; } = new();
+        public Dictionary<GamepadAxis, bool> PreviousTriggerStates { get; } = new();
+        public Dictionary<GamepadButton, (DateTime timestamp, bool isDown, InputAction action)> TurboStates { get; } = new();
+        public HashSet<VirtualKey> HeldVirtualKeys { get; } = new();
+        public HashSet<MouseButton> HeldMouseButtons { get; } = new();
+
+        public DeviceInputState(string deviceId)
+        {
+            DeviceId = deviceId;
+        }
+
+        public void Reset()
+        {
+            PreviousButtonStates.Clear();
+            PreviousTriggerStates.Clear();
+            TurboStates.Clear();
+            HeldVirtualKeys.Clear();
+            HeldMouseButtons.Clear();
+        }
+    }
+
     private readonly IInputSink _inputSink;
     private readonly IControllerSource? _controllerSource;
     private readonly object _syncLock = new();
@@ -20,11 +44,9 @@ public class MappingEngine : IDisposable
     private string? _activeDeviceId;
     private bool _disposed = false;
 
-    private readonly Dictionary<GamepadButton, bool> _previousButtonStates = new();
-    private readonly Dictionary<GamepadAxis, bool> _previousTriggerStates = new();
-    private readonly Dictionary<GamepadButton, (DateTime timestamp, bool isDown, InputAction action)> _turboStates = new();
-    private readonly HashSet<VirtualKey> _activeVirtualKeys = new();
-    private readonly HashSet<MouseButton> _activeMouseButtons = new();
+    private readonly Dictionary<string, DeviceInputState> _deviceStates = new();
+    private readonly Dictionary<VirtualKey, int> _virtualKeyRefCounts = new();
+    private readonly Dictionary<MouseButton, int> _mouseButtonRefCounts = new();
     private bool _wasArmComboActive = false;
 
     public event EventHandler<bool>? ArmedStateChanged;
@@ -59,7 +81,7 @@ public class MappingEngine : IDisposable
     {
         get
         {
-            lock (_syncLock) return new HashSet<VirtualKey>(_activeVirtualKeys);
+            lock (_syncLock) return new HashSet<VirtualKey>(_virtualKeyRefCounts.Keys);
         }
     }
 
@@ -67,7 +89,7 @@ public class MappingEngine : IDisposable
     {
         get
         {
-            lock (_syncLock) return new HashSet<MouseButton>(_activeMouseButtons);
+            lock (_syncLock) return new HashSet<MouseButton>(_mouseButtonRefCounts.Keys);
         }
     }
 
@@ -135,12 +157,68 @@ public class MappingEngine : IDisposable
     {
         lock (_syncLock)
         {
-            if (_activeDeviceId == deviceId || string.IsNullOrEmpty(_activeDeviceId))
+            HandleDeviceDisconnectedInternal(deviceId);
+        }
+    }
+
+    private void HandleDeviceDisconnectedInternal(string deviceId)
+    {
+        if (_deviceStates.TryGetValue(deviceId, out var state))
+        {
+            if (_deviceStates.Count > 1)
             {
-                ReleaseHeldInputsInternal();
-                _activeDeviceId = null;
-                LogDiagnostics($"Controle desconectado: {deviceId}. Inputs liberados por segurança.");
+                // Múltiplos dispositivos conectados: libera apenas os inputs deste dispositivo isolado
+                foreach (var key in state.HeldVirtualKeys.ToList())
+                {
+                    if (_virtualKeyRefCounts.TryGetValue(key, out var count))
+                    {
+                        if (count <= 1)
+                        {
+                            _virtualKeyRefCounts.Remove(key);
+                            _inputSink.SendKeyUp(key);
+                        }
+                        else
+                        {
+                            _virtualKeyRefCounts[key] = count - 1;
+                        }
+                    }
+                }
+
+                foreach (var btn in state.HeldMouseButtons.ToList())
+                {
+                    if (_mouseButtonRefCounts.TryGetValue(btn, out var count))
+                    {
+                        if (count <= 1)
+                        {
+                            _mouseButtonRefCounts.Remove(btn);
+                            _inputSink.SendMouseUp(btn);
+                        }
+                        else
+                        {
+                            _mouseButtonRefCounts[btn] = count - 1;
+                        }
+                    }
+                }
+
+                _deviceStates.Remove(deviceId);
+                LogDiagnostics($"Controle desconectado: {deviceId}. Entradas do dispositivo liberadas isoladamente.");
             }
+            else
+            {
+                // Dispositivo único: executa liberação global com ReleaseAll no sink
+                _deviceStates.Remove(deviceId);
+                ReleaseHeldInputsInternal();
+                LogDiagnostics($"Último controle desconectado: {deviceId}. Todos os inputs liberados.");
+            }
+        }
+        else if (string.IsNullOrEmpty(_activeDeviceId) || _activeDeviceId == deviceId)
+        {
+            ReleaseHeldInputsInternal();
+        }
+
+        if (_activeDeviceId == deviceId)
+        {
+            _activeDeviceId = _deviceStates.Keys.FirstOrDefault();
         }
     }
 
@@ -154,15 +232,12 @@ public class MappingEngine : IDisposable
 
             if (!snapshot.IsConnected)
             {
-                if (_activeDeviceId == snapshot.DeviceId || _activeVirtualKeys.Count > 0 || _activeMouseButtons.Count > 0)
-                {
-                    ReleaseHeldInputsInternal();
-                    _activeDeviceId = null;
-                }
+                HandleDeviceDisconnectedInternal(snapshot.DeviceId);
                 return;
             }
 
             _activeDeviceId = snapshot.DeviceId;
+            var deviceState = GetOrCreateDeviceState(snapshot.DeviceId);
 
             // 0. Detecção de atalho físico no gamepad para alternar estado Armado/Desarmado (Back + Start)
             bool isComboActive = snapshot.IsButtonPressed(GamepadButton.Back) && snapshot.IsButtonPressed(GamepadButton.Start);
@@ -183,10 +258,10 @@ public class MappingEngine : IDisposable
             {
                 foreach (var (button, isPressed) in snapshot.Buttons)
                 {
-                    _previousButtonStates[button] = isPressed;
+                    deviceState.PreviousButtonStates[button] = isPressed;
                 }
-                _previousTriggerStates[GamepadAxis.TriggerLeft] = snapshot.GetAxis(GamepadAxis.TriggerLeft) >= _profile.TriggerThreshold;
-                _previousTriggerStates[GamepadAxis.TriggerRight] = snapshot.GetAxis(GamepadAxis.TriggerRight) >= _profile.TriggerThreshold;
+                deviceState.PreviousTriggerStates[GamepadAxis.TriggerLeft] = snapshot.GetAxis(GamepadAxis.TriggerLeft) >= _profile.TriggerThreshold;
+                deviceState.PreviousTriggerStates[GamepadAxis.TriggerRight] = snapshot.GetAxis(GamepadAxis.TriggerRight) >= _profile.TriggerThreshold;
                 return;
             }
 
@@ -212,60 +287,70 @@ public class MappingEngine : IDisposable
                 if (action.Type == ActionType.None) continue;
 
                 var isPressed = snapshot.IsButtonPressed(button);
-                _previousButtonStates.TryGetValue(button, out var wasPressed);
+                deviceState.PreviousButtonStates.TryGetValue(button, out var wasPressed);
 
                 if (action.IsTurbo)
                 {
-                    ProcessTurboButton(button, action, isPressed, wasPressed, snapshot.Timestamp);
+                    ProcessTurboButton(deviceState, button, action, isPressed, wasPressed, snapshot.Timestamp);
                 }
                 else
                 {
                     if (!wasPressed && isPressed)
                     {
-                        DispatchActionDown(action);
+                        DispatchActionDown(action, deviceState);
                     }
                     else if (wasPressed && !isPressed)
                     {
-                        DispatchActionUp(action);
+                        DispatchActionUp(action, deviceState);
                     }
                 }
 
-                _previousButtonStates[button] = isPressed;
+                deviceState.PreviousButtonStates[button] = isPressed;
             }
 
             // 2. Processar gatilhos analógicos (LT e RT)
-            ProcessTriggerAxis(snapshot, GamepadAxis.TriggerLeft);
-            ProcessTriggerAxis(snapshot, GamepadAxis.TriggerRight);
+            ProcessTriggerAxis(deviceState, snapshot, GamepadAxis.TriggerLeft);
+            ProcessTriggerAxis(deviceState, snapshot, GamepadAxis.TriggerRight);
 
             // 3. Processar movimentação de mouse por stick analógico
             ProcessStickMouseMovement(snapshot);
         }
     }
 
-    private void ProcessTurboButton(GamepadButton button, InputAction action, bool isPressed, bool wasPressed, DateTime timestamp)
+    private DeviceInputState GetOrCreateDeviceState(string deviceId)
+    {
+        if (!_deviceStates.TryGetValue(deviceId, out var state))
+        {
+            state = new DeviceInputState(deviceId);
+            _deviceStates[deviceId] = state;
+        }
+        return state;
+    }
+
+    private void ProcessTurboButton(DeviceInputState deviceState, GamepadButton button, InputAction action, bool isPressed, bool wasPressed, DateTime timestamp)
     {
         if (!wasPressed && isPressed)
         {
             // Começou a pressionar: dispara primeiro KeyDown / MouseDown
-            DispatchActionDown(action);
-            _turboStates[button] = (timestamp, true, action);
+            DispatchActionDown(action, deviceState);
+            deviceState.TurboStates[button] = (timestamp, true, action);
         }
         else if (wasPressed && isPressed)
         {
             // Mantido pressionado: pulsa periodicamente a cada 50ms
-            if (_turboStates.TryGetValue(button, out var state))
+            if (deviceState.TurboStates.TryGetValue(button, out var state))
             {
                 if ((timestamp - state.timestamp).TotalMilliseconds >= 50)
                 {
                     if (state.isDown)
                     {
-                        DispatchActionUp(action);
-                        _turboStates[button] = (timestamp, false, action);
+                        DispatchActionUp(action, deviceState);
+                        deviceState.TurboStates[button] = (timestamp, false, action);
                     }
                     else
                     {
-                        DispatchActionDown(action);
-                        _turboStates[button] = (timestamp, true, action);
+                        DispatchActionDown(action, deviceState);
+                        deviceState.TurboStates[button] = (timestamp, true, action);
                     }
                 }
             }
@@ -273,11 +358,11 @@ public class MappingEngine : IDisposable
         else if (wasPressed && !isPressed)
         {
             // Soltou o botão: garante que se estava Down, solte
-            if (_turboStates.TryGetValue(button, out var state) && state.isDown)
+            if (deviceState.TurboStates.TryGetValue(button, out var state) && state.isDown)
             {
-                DispatchActionUp(action);
+                DispatchActionUp(action, deviceState);
             }
-            _turboStates.Remove(button);
+            deviceState.TurboStates.Remove(button);
         }
     }
 
@@ -296,7 +381,7 @@ public class MappingEngine : IDisposable
         return InputAction.None();
     }
 
-    private void ProcessTriggerAxis(ControllerSnapshot snapshot, GamepadAxis axis)
+    private void ProcessTriggerAxis(DeviceInputState deviceState, ControllerSnapshot snapshot, GamepadAxis axis)
     {
         if (!_profile.TriggerBindings.TryGetValue(axis, out var action) || action.Type == ActionType.None)
         {
@@ -305,11 +390,11 @@ public class MappingEngine : IDisposable
 
         float value = snapshot.GetAxis(axis);
         bool isPressed = value >= _profile.TriggerThreshold;
-        _previousTriggerStates.TryGetValue(axis, out bool wasPressed);
+        deviceState.PreviousTriggerStates.TryGetValue(axis, out bool wasPressed);
 
         if (!wasPressed && isPressed)
         {
-            DispatchActionDown(action);
+            DispatchActionDown(action, deviceState);
             if (_profile.HapticFeedbackEnabled)
             {
                 _controllerSource?.SetRumble(_activeDeviceId ?? "all", 0, 15000, 30);
@@ -317,10 +402,10 @@ public class MappingEngine : IDisposable
         }
         else if (wasPressed && !isPressed)
         {
-            DispatchActionUp(action);
+            DispatchActionUp(action, deviceState);
         }
 
-        _previousTriggerStates[axis] = isPressed;
+        deviceState.PreviousTriggerStates[axis] = isPressed;
     }
 
     private void ProcessStickMouseMovement(ControllerSnapshot snapshot)
@@ -346,7 +431,6 @@ public class MappingEngine : IDisposable
             float magX = Math.Abs(filteredX);
             float magY = Math.Abs(filteredY);
 
-            // Aplica curva de resposta selecionada no perfil (Linear, Quadrática, Agressiva ou Suave)
             float factorX = ApplyCurve(magX, _profile.StickCurveType);
             float factorY = ApplyCurve(magY, _profile.StickCurveType);
 
@@ -379,39 +463,82 @@ public class MappingEngine : IDisposable
         float abs = Math.Abs(value);
         if (abs <= deadzone) return 0.0f;
 
-        // Normaliza a faixa restante de 0 a 1
         float scaled = (abs - deadzone) / (1.0f - deadzone);
         return Math.Sign(value) * scaled;
     }
 
-    private void DispatchActionDown(InputAction action)
+    private void DispatchActionDown(InputAction action, DeviceInputState deviceState)
     {
         switch (action.Type)
         {
             case ActionType.Key when action.Key.HasValue:
-                _inputSink.SendKeyDown(action.Key.Value);
-                _activeVirtualKeys.Add(action.Key.Value);
+                var key = action.Key.Value;
+                if (deviceState.HeldVirtualKeys.Add(key))
+                {
+                    _virtualKeyRefCounts.TryGetValue(key, out int count);
+                    _virtualKeyRefCounts[key] = count + 1;
+                    if (count == 0)
+                    {
+                        _inputSink.SendKeyDown(key);
+                    }
+                }
                 break;
 
             case ActionType.MouseButton when action.MouseButton.HasValue:
-                _inputSink.SendMouseDown(action.MouseButton.Value);
-                _activeMouseButtons.Add(action.MouseButton.Value);
+                var btn = action.MouseButton.Value;
+                if (deviceState.HeldMouseButtons.Add(btn))
+                {
+                    _mouseButtonRefCounts.TryGetValue(btn, out int count);
+                    _mouseButtonRefCounts[btn] = count + 1;
+                    if (count == 0)
+                    {
+                        _inputSink.SendMouseDown(btn);
+                    }
+                }
                 break;
         }
     }
 
-    private void DispatchActionUp(InputAction action)
+    private void DispatchActionUp(InputAction action, DeviceInputState deviceState)
     {
         switch (action.Type)
         {
             case ActionType.Key when action.Key.HasValue:
-                _inputSink.SendKeyUp(action.Key.Value);
-                _activeVirtualKeys.Remove(action.Key.Value);
+                var key = action.Key.Value;
+                if (deviceState.HeldVirtualKeys.Remove(key))
+                {
+                    if (_virtualKeyRefCounts.TryGetValue(key, out int count))
+                    {
+                        if (count <= 1)
+                        {
+                            _virtualKeyRefCounts.Remove(key);
+                            _inputSink.SendKeyUp(key);
+                        }
+                        else
+                        {
+                            _virtualKeyRefCounts[key] = count - 1;
+                        }
+                    }
+                }
                 break;
 
             case ActionType.MouseButton when action.MouseButton.HasValue:
-                _inputSink.SendMouseUp(action.MouseButton.Value);
-                _activeMouseButtons.Remove(action.MouseButton.Value);
+                var btn = action.MouseButton.Value;
+                if (deviceState.HeldMouseButtons.Remove(btn))
+                {
+                    if (_mouseButtonRefCounts.TryGetValue(btn, out int count))
+                    {
+                        if (count <= 1)
+                        {
+                            _mouseButtonRefCounts.Remove(btn);
+                            _inputSink.SendMouseUp(btn);
+                        }
+                        else
+                        {
+                            _mouseButtonRefCounts[btn] = count - 1;
+                        }
+                    }
+                }
                 break;
         }
     }
@@ -428,11 +555,13 @@ public class MappingEngine : IDisposable
         }
         finally
         {
-            _activeVirtualKeys.Clear();
-            _activeMouseButtons.Clear();
-            _previousButtonStates.Clear();
-            _previousTriggerStates.Clear();
-            _turboStates.Clear();
+            _virtualKeyRefCounts.Clear();
+            _mouseButtonRefCounts.Clear();
+            foreach (var state in _deviceStates.Values)
+            {
+                state.Reset();
+            }
+            _deviceStates.Clear();
         }
     }
 
