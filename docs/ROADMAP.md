@@ -1,34 +1,29 @@
-# Roadmap — OpenPad
+# 🗺️ Roadmap Realista de Produto — OpenPad
 
-## Sprint 1 — entrada, motor, saída
-- [ ] Solution WPF + Core + Input + NUnit
-- [ ] Contratos IControllerSource / IInputSink / IProfileStore
-- [ ] Backend SDL3 para detecção e leitura de gamepads
-- [ ] UI com controles conectados e painel de input ao vivo
-- [ ] MappingEngine com button down/up e toggle desarmado por padrão
-- [ ] Win32 SendInput para tecla e mouse com release seguro
-- [ ] Persistência JSON versionado e testes com fakes
-- [ ] Rodar com controle físico Xbox/PlayStation se disponível
+Este documento define os marcos de evolução técnica e de produto do **OpenPad**, priorizando a estabilidade, a experiência do jogador e a fidelidade de controle no Windows.
 
-## Sprint 2 — UX que diferencia
-- [ ] Editor visual arrastar/selecionar botões
-- [ ] Deadzones configuráveis, curva do analógico e mouse via stick
-- [ ] Perfis por aplicativo com consentimento claro
-- [ ] Diagnóstico de conexão Bluetooth/USB e feedback do input
+---
 
-## Sprint 3 — release público
-- [ ] CI Windows `dotnet test` e build release
-- [ ] Empacotamento portable e checksum
-- [ ] README em inglês e português, demo GIF, changelog
-- [ ] CONTRIBUTING, issue templates, licença de terceiros, security policy
+## 🎯 Marco 1 — Estabilização do Core e MVP Portátil (Concluído)
+- [x] Detecção de gamepads físicos via SDL3 Gamepad API.
+- [x] Injeção de teclado e mouse via Win32 `SendInput()` com validação de retorno.
+- [x] Isolamento completo entre múltiplos controles com contagem de referências.
+- [x] Homologação automatizada dos 10 passos do ciclo de vida do remapeamento.
+- [x] Atalho físico de emergência no gamepad (Back + Start).
+- [x] Empacotamento portátil x64 com cópia nativa da `SDL3.dll`.
+- [x] 182 testes unitários e de integração com 100% de aprovação.
 
-## Pesquisa futura (não promessa)
-- [ ] Gyro, rumble, combinações e macros
-- [ ] Emulação de controle virtual com backend mantenível, licenças e assinatura adequadas
-- [ ] Verificar nome de marca/repositório OpenPad
+---
 
-## Fontes
-- https://wiki.libsdl.org/SDL3/CategoryGamepad
-- https://github.com/AntiMicroX/antimicrox
-- https://github.com/nefarius/ViGEmBus
-- https://github.com/LizardByte/libvirtualhid
+## 🎮 Marco 2 — Homologação de Campo e Interface Moderna (Próximo)
+- [ ] Homologação manual com controle físico Xbox Series, DualSense e Nintendo Switch Pro.
+- [ ] Atalho configurável de emergência pelo teclado físico (ex: `Ctrl + Shift + F12`).
+- [ ] Visualizador de resposta analógica com visualização em gráfico dos eixos e deadzones.
+- [ ] Geração de release zip autocontida com checksum SHA-256 no GitHub Releases.
+
+---
+
+## 🚀 Marco 3 — Recursos Avançados e Drivers Virtuais
+- [ ] Pesquisa e integração com driver assinado ViGEmBus para saída virtual de controle Xbox 360 / DualShock 4.
+- [ ] Suporte a curvas cinemáticas avançadas e deadzones em formato circular/axial personalizáveis na interface.
+- [ ] Alternância automática de perfil por processo ativo em primeiro plano.
