@@ -14,4 +14,12 @@
     <UseWindowsForms>true</UseWindowsForms>
   </PropertyGroup>
 
+  <Target Name="CopySDL3NativeDll" AfterTargets="Publish">
+    <Copy SourceFiles="$(PublishDir)runtimes\win-x64\native\SDL3.dll"
+          DestinationFolder="$(PublishDir)"
+          Condition="Exists('$(PublishDir)runtimes\win-x64\native\SDL3.dll')" />
+    <Error Text="Dependência nativa obrigatória SDL3.dll não encontrada em '$(PublishDir)'. Verifique a restauração do pacote SDL3."
+           Condition="'$(RuntimeIdentifier)' == 'win-x64' And !Exists('$(PublishDir)SDL3.dll')" />
+  </Target>
+
 </Project>

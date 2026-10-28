@@ -29,12 +29,35 @@ jobs:
       - name: Run NUnit tests
         run: dotnet test OpenPad.slnx --configuration Release --no-build --verbosity normal
 
-      - name: Publish OpenPad App
-        run: dotnet publish src/OpenPad.App/OpenPad.App.csproj --configuration Release -o publish/
+      - name: Publish OpenPad App (win-x64 Portable)
+        run: dotnet publish src/OpenPad.App/OpenPad.App.csproj --configuration Release -r win-x64 --no-self-contained -o publish/win-x64
 
-      - name: Upload Build Artifact
+      - name: Verify Native Dependencies
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "publish/win-x64/SDL3.dll")) {
+            Write-Error "CRITICAL: SDL3.dll was not found in published artifact folder!"
+            exit 1
+          }
+          if (-not (Test-Path "publish/win-x64/OpenPad.App.exe")) {
+            Write-Error "CRITICAL: OpenPad.App.exe was not found in published artifact folder!"
+            exit 1
+          }
+          Write-Host "Verified SDL3.dll and OpenPad.App.exe successfully."
+
+      - name: Package Portable ZIP & Compute SHA-256 Checksum
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "publish/win-x64/*" -DestinationPath "OpenPad-win-x64.zip" -Force
+          $hash = (Get-FileHash -Path "OpenPad-win-x64.zip" -Algorithm SHA256).Hash
+          Set-Content -Path "OpenPad-win-x64.zip.sha256" -Value "$hash  OpenPad-win-x64.zip"
+          Write-Host "Generated OpenPad-win-x64.zip with SHA-256: $hash"
+
+      - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: OpenPad-Windows-Release
-          path: publish/
+          name: OpenPad-win-x64
+          path: |
+            OpenPad-win-x64.zip
+            OpenPad-win-x64.zip.sha256
           retention-days: 7

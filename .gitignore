@@ -13,3 +13,5 @@ TestResults/
 !*.example
 # User profiles local, do not commit
 profiles-local/
+publish/
+*.zip

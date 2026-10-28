@@ -5,13 +5,13 @@ using OpenPad.Core.Models;
 namespace OpenPad.Input;
 
 /// <summary>
-/// Implementação de IInputSink usando Win32 SendInput.
-/// Fornece injeção de teclas, cliques e movimentação relativa do mouse no Windows com rastreamento
-/// de estado para garantia de liberação de todas as teclas pressionadas.
-/// Não requer privilégios de administrador ou drivers virtuais.
+/// Implementação de IInputSink usando Win32 SendInput com validação estrita de retorno,
+/// tratamento de erros de privilégio/UIPI, diagnósticos e suporte a injeção nativa para testes.
 /// </summary>
 public class Win32SendInputSink : IInputSink
 {
+    public delegate uint SendInputNativeHandler(uint nInputs, NativeInput[] pInputs, int cbSize);
+
     private const uint INPUT_MOUSE = 0;
     private const uint INPUT_KEYBOARD = 1;
 
@@ -32,14 +32,14 @@ public class Win32SendInputSink : IInputSink
     private const uint XBUTTON2 = 0x0002;
 
     [StructLayout(LayoutKind.Sequential)]
-    private struct NativeInput
+    public struct NativeInput
     {
         public uint type;
         public InputUnion u;
     }
 
     [StructLayout(LayoutKind.Explicit)]
-    private struct InputUnion
+    public struct InputUnion
     {
         [FieldOffset(0)]
         public MOUSEINPUT mi;
@@ -48,7 +48,7 @@ public class Win32SendInputSink : IInputSink
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    private struct KEYBDINPUT
+    public struct KEYBDINPUT
     {
         public ushort wVk;
         public ushort wScan;
@@ -58,7 +58,7 @@ public class Win32SendInputSink : IInputSink
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    private struct MOUSEINPUT
+    public struct MOUSEINPUT
     {
         public int dx;
         public int dy;
@@ -71,10 +71,23 @@ public class Win32SendInputSink : IInputSink
     [DllImport("user32.dll", SetLastError = true)]
     private static extern uint SendInput(uint nInputs, NativeInput[] pInputs, int cbSize);
 
+    private readonly SendInputNativeHandler _sendInputNative;
     private readonly object _syncLock = new();
     private readonly HashSet<VirtualKey> _pressedKeys = new();
     private readonly HashSet<MouseButton> _pressedMouseButtons = new();
+    private readonly HashSet<VirtualKey> _pendingReleaseKeys = new();
+    private readonly HashSet<MouseButton> _pendingReleaseMouseButtons = new();
     private bool _disposed = false;
+
+    public int LastWin32Error { get; private set; }
+    public long SuccessfulEventCount { get; private set; }
+    public long FailedEventCount { get; private set; }
+    public event EventHandler<string>? DiagnosticsLogged;
+
+    private void LogDiagnostics(string message)
+    {
+        DiagnosticsLogged?.Invoke(this, $"[{DateTime.Now:HH:mm:ss.fff}] {message}");
+    }
 
     public IReadOnlySet<VirtualKey> CurrentlyPressedKeys
     {
@@ -92,85 +105,205 @@ public class Win32SendInputSink : IInputSink
         }
     }
 
-    public void SendKeyDown(VirtualKey key)
+    public IReadOnlySet<VirtualKey> PendingReleaseKeys
     {
-        if (key == VirtualKey.None) return;
-
-        lock (_syncLock)
+        get
         {
-            if (_disposed) return;
-            SendKeyInputNative((ushort)key, KEYEVENTF_KEYDOWN);
-            _pressedKeys.Add(key);
+            lock (_syncLock) return new HashSet<VirtualKey>(_pendingReleaseKeys);
         }
     }
 
-    public void SendKeyUp(VirtualKey key)
+    public IReadOnlySet<MouseButton> PendingReleaseMouseButtons
     {
-        if (key == VirtualKey.None) return;
-
-        lock (_syncLock)
+        get
         {
-            if (_disposed) return;
-            SendKeyInputNative((ushort)key, KEYEVENTF_KEYUP);
-            _pressedKeys.Remove(key);
+            lock (_syncLock) return new HashSet<MouseButton>(_pendingReleaseMouseButtons);
         }
     }
 
-    public void SendMouseDown(MouseButton button)
+    public Win32SendInputSink() : this(SendInput)
+    {
+    }
+
+    public Win32SendInputSink(SendInputNativeHandler sendInputNative)
+    {
+        _sendInputNative = sendInputNative ?? throw new ArgumentNullException(nameof(sendInputNative));
+    }
+
+    public bool SendKeyDown(VirtualKey key)
+    {
+        if (key == VirtualKey.None) return false;
+
+        lock (_syncLock)
+        {
+            if (_disposed) return false;
+            bool ok = SendKeyInputNative((ushort)key, KEYEVENTF_KEYDOWN);
+            if (ok)
+            {
+                _pressedKeys.Add(key);
+                _pendingReleaseKeys.Remove(key);
+                return true;
+            }
+            return false;
+        }
+    }
+
+    public bool SendKeyUp(VirtualKey key)
+    {
+        if (key == VirtualKey.None) return false;
+
+        lock (_syncLock)
+        {
+            if (_disposed) return false;
+            bool ok = SendKeyInputNative((ushort)key, KEYEVENTF_KEYUP);
+            if (ok)
+            {
+                _pressedKeys.Remove(key);
+                _pendingReleaseKeys.Remove(key);
+                return true;
+            }
+            else
+            {
+                // Liberação falhou no SO: não esquecemos a tecla! Mantemos em pending para recuperação
+                _pendingReleaseKeys.Add(key);
+                LogDiagnostics($"Falha ao enviar KeyUp para {key} (Win32 Error: {LastWin32Error}). Tecla retida em liberação pendente.");
+                return false;
+            }
+        }
+    }
+
+    public bool SendMouseDown(MouseButton button)
     {
         lock (_syncLock)
         {
-            if (_disposed) return;
+            if (_disposed) return false;
             var (flags, data) = GetMouseDownFlags(button);
-            SendMouseInputNative(flags, data, 0, 0);
-            _pressedMouseButtons.Add(button);
+            bool ok = SendMouseInputNative(flags, data, 0, 0);
+            if (ok)
+            {
+                _pressedMouseButtons.Add(button);
+                _pendingReleaseMouseButtons.Remove(button);
+                return true;
+            }
+            return false;
         }
     }
 
-    public void SendMouseUp(MouseButton button)
+    public bool SendMouseUp(MouseButton button)
     {
         lock (_syncLock)
         {
-            if (_disposed) return;
+            if (_disposed) return false;
             var (flags, data) = GetMouseUpFlags(button);
-            SendMouseInputNative(flags, data, 0, 0);
-            _pressedMouseButtons.Remove(button);
+            bool ok = SendMouseInputNative(flags, data, 0, 0);
+            if (ok)
+            {
+                _pressedMouseButtons.Remove(button);
+                _pendingReleaseMouseButtons.Remove(button);
+                return true;
+            }
+            else
+            {
+                _pendingReleaseMouseButtons.Add(button);
+                LogDiagnostics($"Falha ao enviar MouseUp para {button} (Win32 Error: {LastWin32Error}). Botão retido em liberação pendente.");
+                return false;
+            }
         }
     }
 
-    public void SendMouseMove(int dx, int dy)
+    public bool SendMouseMove(int dx, int dy)
     {
-        if (dx == 0 && dy == 0) return;
+        if (dx == 0 && dy == 0) return true;
 
         lock (_syncLock)
         {
-            if (_disposed) return;
-            SendMouseInputNative(MOUSEEVENTF_MOVE, 0, dx, dy);
+            if (_disposed) return false;
+            return SendMouseInputNative(MOUSEEVENTF_MOVE, 0, dx, dy);
         }
     }
 
-    public void ReleaseAll()
+    public bool ReleaseAll()
     {
         lock (_syncLock)
         {
-            // Libera todas as teclas pressionadas
+            if (_disposed) return false;
+
+            bool allSucceeded = true;
             foreach (var key in _pressedKeys.ToList())
             {
-                SendKeyInputNative((ushort)key, KEYEVENTF_KEYUP);
+                bool ok = SendKeyInputNative((ushort)key, KEYEVENTF_KEYUP);
+                if (ok)
+                {
+                    _pressedKeys.Remove(key);
+                    _pendingReleaseKeys.Remove(key);
+                }
+                else
+                {
+                    _pendingReleaseKeys.Add(key);
+                    allSucceeded = false;
+                    LogDiagnostics($"ReleaseAll: Falha ao enviar KeyUp para {key} (Win32 Error: {LastWin32Error}).");
+                }
             }
-            _pressedKeys.Clear();
 
-            // Libera todos os botões do mouse pressionados
             foreach (var btn in _pressedMouseButtons.ToList())
             {
                 var (flags, data) = GetMouseUpFlags(btn);
-                SendMouseInputNative(flags, data, 0, 0);
+                bool ok = SendMouseInputNative(flags, data, 0, 0);
+                if (ok)
+                {
+                    _pressedMouseButtons.Remove(btn);
+                    _pendingReleaseMouseButtons.Remove(btn);
+                }
+                else
+                {
+                    _pendingReleaseMouseButtons.Add(btn);
+                    allSucceeded = false;
+                    LogDiagnostics($"ReleaseAll: Falha ao enviar MouseUp para {btn} (Win32 Error: {LastWin32Error}).");
+                }
             }
-            _pressedMouseButtons.Clear();
+
+            return allSucceeded;
         }
     }
 
-    private static void SendKeyInputNative(ushort vkCode, uint flags)
+    public int RetryPendingReleases()
+    {
+        lock (_syncLock)
+        {
+            if (_disposed || (_pendingReleaseKeys.Count == 0 && _pendingReleaseMouseButtons.Count == 0))
+            {
+                return 0;
+            }
+
+            int recovered = 0;
+            foreach (var key in _pendingReleaseKeys.ToList())
+            {
+                if (SendKeyInputNative((ushort)key, KEYEVENTF_KEYUP))
+                {
+                    _pressedKeys.Remove(key);
+                    _pendingReleaseKeys.Remove(key);
+                    recovered++;
+                    LogDiagnostics($"Recuperação bem-sucedida de KeyUp pendente para {key}.");
+                }
+            }
+
+            foreach (var btn in _pendingReleaseMouseButtons.ToList())
+            {
+                var (flags, data) = GetMouseUpFlags(btn);
+                if (SendMouseInputNative(flags, data, 0, 0))
+                {
+                    _pressedMouseButtons.Remove(btn);
+                    _pendingReleaseMouseButtons.Remove(btn);
+                    recovered++;
+                    LogDiagnostics($"Recuperação bem-sucedida de MouseUp pendente para {btn}.");
+                }
+            }
+
+            return recovered;
+        }
+    }
+
+    private bool SendKeyInputNative(ushort vkCode, uint flags)
     {
         var input = new NativeInput
         {
@@ -188,10 +321,21 @@ public class Win32SendInputSink : IInputSink
             }
         };
 
-        SendInput(1, new[] { input }, Marshal.SizeOf<NativeInput>());
+        uint sent = _sendInputNative(1, new[] { input }, Marshal.SizeOf<NativeInput>());
+        if (sent == 0)
+        {
+            int err = Marshal.GetLastWin32Error();
+            LastWin32Error = err;
+            FailedEventCount++;
+            DiagnosticsLogged?.Invoke(this, $"Win32 SendInput rejeitado para tecla 0x{vkCode:X4} (Flags: 0x{flags:X4}). Erro Win32: {err}");
+            return false;
+        }
+
+        SuccessfulEventCount++;
+        return true;
     }
 
-    private static void SendMouseInputNative(uint flags, uint mouseData, int dx, int dy)
+    private bool SendMouseInputNative(uint flags, uint mouseData, int dx, int dy)
     {
         var input = new NativeInput
         {
@@ -210,7 +354,18 @@ public class Win32SendInputSink : IInputSink
             }
         };
 
-        SendInput(1, new[] { input }, Marshal.SizeOf<NativeInput>());
+        uint sent = _sendInputNative(1, new[] { input }, Marshal.SizeOf<NativeInput>());
+        if (sent == 0)
+        {
+            int err = Marshal.GetLastWin32Error();
+            LastWin32Error = err;
+            FailedEventCount++;
+            DiagnosticsLogged?.Invoke(this, $"Win32 SendInput rejeitado para mouse (Flags: 0x{flags:X4}, dx: {dx}, dy: {dy}). Erro Win32: {err}");
+            return false;
+        }
+
+        SuccessfulEventCount++;
+        return true;
     }
 
     private static (uint flags, uint data) GetMouseDownFlags(MouseButton button) => button switch
